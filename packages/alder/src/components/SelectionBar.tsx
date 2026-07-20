@@ -14,7 +14,7 @@ export function SelectionBar(props: { ctx: Ctx }) {
           <span>
             Click to select · ⇧-click or ⇧←/→ for a range, ⌥-click to toggle (words and
             segments can be mixed) · right-click a segment to split it · double-click a word
-            to edit text (space splits, ⌫ at start joins) · double-click empty track space to
+            to edit text (space splits, ⌫ at start joins) · right-click empty track space to
             add a segment · drag words/segments to retime · scroll to zoom, drag waveform to
             pan
           </span>

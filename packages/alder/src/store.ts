@@ -228,6 +228,58 @@ export function createAnnotatorStore(
     );
   }
 
+  /**
+   * Rigidly shift a set of words by `delta`, so a multi-selection drags as one
+   * block. `origins` are the timestamps captured at drag start (parallel to
+   * `refs`), so repeated calls are absolute and never drift. The shift is
+   * clamped once for the whole set: whichever word runs into a *non-moving*
+   * neighbour first stops all of them, which keeps the gaps within the set
+   * intact instead of collapsing them one by one.
+   */
+  function moveWords(refs: WordRef[], origins: number[], delta: number) {
+    if (!refs.length) return;
+    const moving = new Set(refs.map(itemKey));
+    let lo = -Infinity;
+    let hi = Infinity;
+    refs.forEach((r, n) => {
+      const seg = getSeg(r.segKey);
+      if (!seg || r.wordIdx < 0 || r.wordIdx >= seg.words.length) return;
+      const i = r.wordIdx;
+      const t0 = origins[n];
+      if (!moving.has(itemKey({ segKey: r.segKey, wordIdx: i - 1 }))) {
+        lo = Math.max(lo, (i > 0 ? seg.words[i - 1].timestamp + MIN_GAP : 0) - t0);
+      }
+      if (!moving.has(itemKey({ segKey: r.segKey, wordIdx: i + 1 }))) {
+        const bound =
+          i < seg.words.length - 1
+            ? seg.words[i + 1].timestamp - MIN_GAP
+            : duration - MIN_GAP;
+        hi = Math.min(hi, bound - t0);
+      }
+    });
+    const d = clamp(delta, lo, Math.max(lo, hi));
+
+    const bySeg = new Map<number, { i: number; t: number }[]>();
+    refs.forEach((r, n) => {
+      const arr = bySeg.get(r.segKey) ?? [];
+      arr.push({ i: r.wordIdx, t: origins[n] + d });
+      bySeg.set(r.segKey, arr);
+    });
+    for (const [key, items] of bySeg) {
+      const idx = segIndex(key);
+      if (idx < 0) continue;
+      setDoc(
+        "segments",
+        idx,
+        produce((seg) => {
+          for (const { i, t } of items) {
+            if (i >= 0 && i < seg.words.length) seg.words[i].timestamp = t;
+          }
+        }),
+      );
+    }
+  }
+
   function moveSegment(key: number, delta: number) {
     const idx = segIndex(key);
     if (idx < 0) return;
@@ -548,6 +600,7 @@ export function createAnnotatorStore(
     beginOp,
     endOp,
     moveWord,
+    moveWords,
     moveSegment,
     setSegmentSpeaker,
     splitSegment,

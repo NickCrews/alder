@@ -1,6 +1,6 @@
 import { Show, createEffect, createSignal } from "solid-js";
 import type { Ctx } from "./ctx";
-import type { SegRec } from "../store";
+import type { SegRec, WordRef } from "../store";
 import { startDrag } from "../drag";
 import { wordEnd } from "../time";
 
@@ -58,6 +58,17 @@ export function WordChip(props: {
     setEditing(req.seed != null ? { mode: "replace", seed: req.seed } : { mode: "end" });
   });
 
+  /** The selection as word refs; a whole-segment item expands to all its words. */
+  const groupRefs = (): WordRef[] =>
+    store.selectedItems().flatMap((it) =>
+      it.wordIdx != null
+        ? [{ segKey: it.segKey, wordIdx: it.wordIdx }]
+        : (store.getSeg(it.segKey)?.words ?? []).map((_, i) => ({
+            segKey: it.segKey,
+            wordIdx: i,
+          })),
+    );
+
   function onPointerDown(e: PointerEvent) {
     if (editing()) return;
     e.stopPropagation();
@@ -68,20 +79,35 @@ export function WordChip(props: {
       else store.toggleSelected(item);
       return;
     }
-    const t0 = word().timestamp;
-    const showGuide = () =>
-      props.ctx.setGuide({
-        start: word().timestamp,
-        end: wordEnd(props.seg.words, props.index, store.lastWordDur()),
+    // Dragging a word that's part of a multi-selection moves the whole set;
+    // dragging anything else collapses the selection onto it first.
+    const group = selected() ? groupRefs() : [];
+    const dragging: WordRef[] =
+      group.length > 1 ? group : [{ segKey: props.seg.key, wordIdx: props.index }];
+    const origins = dragging.map((r) => store.getSeg(r.segKey)?.words[r.wordIdx]?.timestamp ?? 0);
+
+    const showGuide = () => {
+      const spans = dragging.map((r) => {
+        const words = store.getSeg(r.segKey)?.words ?? [];
+        return {
+          start: words[r.wordIdx]?.timestamp ?? 0,
+          end: wordEnd(words, r.wordIdx, store.lastWordDur()),
+        };
       });
+      props.ctx.setGuide({
+        start: Math.min(...spans.map((s) => s.start)),
+        end: Math.max(...spans.map((s) => s.end)),
+      });
+    };
     startDrag(e, {
       onStart: () => {
         store.beginOp();
-        store.setSelection({ segKey: props.seg.key, wordIdx: props.index });
+        if (dragging.length === 1)
+          store.setSelection({ segKey: props.seg.key, wordIdx: props.index });
         showGuide();
       },
       onMove: (dx) => {
-        store.moveWord(props.seg.key, props.index, t0 + dx / props.ctx.scale());
+        store.moveWords(dragging, origins, dx / props.ctx.scale());
         showGuide();
       },
       onEnd: (moved) => {

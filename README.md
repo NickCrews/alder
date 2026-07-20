@@ -114,7 +114,13 @@ export default {
   start joins into the previous word, empty text deletes.
 - **Segments**: drag the label strip to shift the whole segment in time; with a
   selection, the bottom bar offers speaker reassignment, split-before-word,
-  merge-with-next (same speaker), and delete. Double-click empty track space to
+  merge-with-next (same speaker), and delete. Right-click empty track space to
   create a segment.
 - **Speakers**: add / rename (double-click) / delete (only when unused).
+- **Copy/paste**: ⌘C writes the selection as text (plus HTML with speaker labels
+  when whole segments are selected). ⌘V overlays the pasted words onto the
+  selected ones slot by slot, each keeping the timestamp it lands on; surplus
+  words subdivide the last slot, unused slots are deleted, so nothing outside
+  the selection changes. With nothing selected it creates a segment at the
+  playhead, evenly spaced by the median word gap. No cut.
 - **Undo/redo**: ⌘Z / ⇧⌘Z, snapshot-based.

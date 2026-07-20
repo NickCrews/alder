@@ -47,6 +47,50 @@ describe("store ops", () => {
     });
   });
 
+  it("drags a multi-selection rigidly, preserving gaps within the set", () => {
+    withStore((s) => {
+      const key = s.doc.segments[0].key;
+      const refs = [
+        { segKey: key, wordIdx: 0 },
+        { segKey: key, wordIdx: 1 },
+      ];
+      s.beginOp();
+      s.moveWords(refs, [1.0, 1.5], 0.2);
+      s.endOp();
+      expect(s.doc.segments[0].words[0].timestamp).toBeCloseTo(1.2);
+      expect(s.doc.segments[0].words[1].timestamp).toBeCloseTo(1.7);
+      expect(s.doc.segments[0].words[2].timestamp).toBe(2.0); // unselected, stays
+    });
+  });
+
+  it("stops the whole set at the first non-moving neighbor", () => {
+    withStore((s) => {
+      const key = s.doc.segments[0].key;
+      const refs = [
+        { segKey: key, wordIdx: 0 },
+        { segKey: key, wordIdx: 1 },
+      ];
+      s.beginOp();
+      s.moveWords(refs, [1.0, 1.5], 5.0); // word 1 would blow past word 2 at 2.0
+      s.endOp();
+      const [w0, w1, w2] = s.doc.segments[0].words;
+      expect(w1.timestamp).toBeLessThan(w2.timestamp);
+      // the internal 0.5s gap survives the clamp
+      expect(w1.timestamp - w0.timestamp).toBeCloseTo(0.5);
+    });
+  });
+
+  it("drags words across segments together", () => {
+    withStore((s) => {
+      const [a, b] = s.doc.segments.map((seg) => seg.key);
+      s.beginOp();
+      s.moveWords([{ segKey: a, wordIdx: 2 }, { segKey: b, wordIdx: 0 }], [2.0, 5.0], 0.3);
+      s.endOp();
+      expect(s.doc.segments[0].words[2].timestamp).toBeCloseTo(2.3);
+      expect(s.doc.segments[1].words[0].timestamp).toBeCloseTo(5.3);
+    });
+  });
+
   it("translates whole segments, clamped to clip bounds", () => {
     withStore((s) => {
       const key = s.doc.segments[0].key;

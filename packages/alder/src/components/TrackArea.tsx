@@ -1,5 +1,4 @@
-import { For, Index, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import { Portal } from "solid-js/web";
+import { For, Index, Show, createMemo, createSignal } from "solid-js";
 import type { Ctx } from "./ctx";
 import type { SegRec } from "../store";
 import { assignLanes } from "../lanes";
@@ -8,12 +7,13 @@ import { speakerColor } from "../colors";
 import { startDrag } from "../drag";
 import { WordChip } from "./WordChip";
 import { SpeakerSelect } from "./SpeakerSelect";
+import { ContextMenu, MenuItem, type MenuPos, menuPosAt } from "./ContextMenu";
 
 export const LANE_HEIGHT = 72;
 const LABEL_HEIGHT = 20;
 /** Vertical gap between a segment block and its lane edges. */
 const LANE_PAD = 4;
-/** Empty strip below the last lane — the double-click-to-add target when lanes are full. */
+/** Empty strip below the last lane — the right-click-to-add target when lanes are full. */
 const TRACK_PAD = 20;
 
 function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
@@ -32,9 +32,7 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
     return end() >= v.start && start() <= v.start + v.dur;
   };
 
-  const [menu, setMenu] = createSignal<{ x: number; y: number; splitIdx: number | null } | null>(
-    null,
-  );
+  const [menu, setMenu] = createSignal<(MenuPos & { splitIdx: number | null }) | null>(null);
 
   /** Right-click anywhere on the segment: offer to split at the clicked time. */
   function onContextMenu(e: MouseEvent) {
@@ -46,24 +44,8 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const t = start() + (e.clientX - rect.left) / props.ctx.scale();
     const i = props.seg.words.findIndex((w) => w.timestamp > t);
-    setMenu({
-      x: Math.min(e.clientX, Math.max(0, window.innerWidth - 160)),
-      y: e.clientY + 2,
-      splitIdx: i >= 1 ? i : null,
-    });
+    setMenu({ ...menuPosAt(e), splitIdx: i >= 1 ? i : null });
   }
-
-  createEffect(() => {
-    if (!menu()) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        setMenu(null);
-      }
-    };
-    document.addEventListener("keydown", onKeyDown, true);
-    onCleanup(() => document.removeEventListener("keydown", onKeyDown, true));
-  });
 
   function onPointerDown(e: PointerEvent) {
     e.stopPropagation();
@@ -156,40 +138,23 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
       </div>
       <Show when={menu()}>
         {(m) => (
-          <Portal>
-            <div
-              class="fixed inset-0 z-40"
-              onPointerDown={(e) => {
-                e.stopPropagation();
+          <ContextMenu pos={m()} onClose={() => setMenu(null)}>
+            <MenuItem
+              disabled={m().splitIdx == null}
+              title={
+                m().splitIdx == null
+                  ? "Nothing to split off here — click between two words"
+                  : "Split the segment at this point"
+              }
+              onSelect={() => {
+                const i = m().splitIdx;
                 setMenu(null);
+                if (i != null) store.splitSegment(props.seg.key, i);
               }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setMenu(null);
-              }}
-            />
-            <div
-              class="alder-root fixed z-50 min-w-32 rounded-md border border-zinc-700 bg-zinc-800 py-1 font-sans text-xs text-zinc-100 shadow-xl shadow-black/40"
-              style={{ left: `${m().x}px`, top: `${m().y}px` }}
             >
-              <button
-                class="flex w-full cursor-pointer items-center gap-2 px-2 py-1 text-left hover:bg-zinc-700 disabled:cursor-default disabled:text-zinc-500 disabled:hover:bg-transparent"
-                disabled={m().splitIdx == null}
-                title={
-                  m().splitIdx == null
-                    ? "Nothing to split off here — click between two words"
-                    : "Split the segment at this point"
-                }
-                onClick={() => {
-                  const i = m().splitIdx;
-                  setMenu(null);
-                  if (i != null) store.splitSegment(props.seg.key, i);
-                }}
-              >
-                Split here
-              </button>
-            </div>
-          </Portal>
+              Split here
+            </MenuItem>
+          </ContextMenu>
         )}
       </Show>
     </Show>
@@ -201,10 +166,18 @@ export function TrackArea(props: { ctx: Ctx }) {
   const lanes = createMemo(() => assignLanes(store.doc.segments, store.lastWordDur()));
   const height = () => lanes().count * LANE_HEIGHT + TRACK_PAD;
 
-  function onDblClick(e: MouseEvent) {
+  const [menu, setMenu] = createSignal<(MenuPos & { time: number }) | null>(null);
+
+  /** Right-click empty track space: offer to start a segment at that time. */
+  function onContextMenu(e: MouseEvent) {
     if (e.target !== e.currentTarget) return;
+    e.preventDefault();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const t = props.ctx.timeAt(e.clientX - rect.left);
+    setMenu({ ...menuPosAt(e), time: props.ctx.timeAt(e.clientX - rect.left) });
+  }
+
+  function addSegment(t: number) {
+    setMenu(null);
     const sel = store.selection();
     const speakerId = sel ? store.getSeg(sel.segKey)?.speaker_id : undefined;
     store.createSegment(t, speakerId);
@@ -214,17 +187,29 @@ export function TrackArea(props: { ctx: Ctx }) {
     <div
       class="relative w-full overflow-hidden rounded bg-zinc-950/60"
       style={{ height: `${height()}px` }}
-      onDblClick={onDblClick}
+      onContextMenu={onContextMenu}
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) store.setSelection(null);
       }}
-      title="Double-click empty space to add a segment"
+      title="Right-click empty space to add a segment"
     >
       <For each={store.doc.segments}>
         {(seg) => (
           <SegmentBlock ctx={props.ctx} seg={seg} lane={lanes().lane.get(seg.key) ?? 0} />
         )}
       </For>
+      <Show when={menu()}>
+        {(m) => (
+          <ContextMenu pos={m()} onClose={() => setMenu(null)}>
+            <MenuItem
+              title="Start a new segment at this point"
+              onSelect={() => addSegment(m().time)}
+            >
+              Add segment here
+            </MenuItem>
+          </ContextMenu>
+        )}
+      </Show>
     </div>
   );
 }

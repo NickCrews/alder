@@ -1,13 +1,13 @@
-import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
-import { Portal } from "solid-js/web";
+import { For, Show, createSignal } from "solid-js";
 import type { Ctx } from "./ctx";
 import { speakerColor } from "../colors";
+import { ContextMenu, MenuItem, type MenuPos } from "./ContextMenu";
 
 /** Pill-shaped speaker picker rendered inside a segment block. The menu is
  * portaled to the body so it isn't clipped by the segment's overflow-hidden. */
 export function SpeakerSelect(props: { ctx: Ctx; segKey: number; speakerId: number }) {
   const { store } = props.ctx;
-  const [menuPos, setMenuPos] = createSignal<{ x: number; y: number } | null>(null);
+  const [menuPos, setMenuPos] = createSignal<MenuPos | null>(null);
   let btnRef: HTMLButtonElement | undefined;
 
   const color = () => speakerColor(store.doc.speakers, props.speakerId);
@@ -31,18 +31,6 @@ export function SpeakerSelect(props: { ctx: Ctx; segKey: number; speakerId: numb
     store.setSegmentSpeaker(props.segKey, speakerId);
     setMenuPos(null);
   }
-
-  createEffect(() => {
-    if (!menuPos()) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        setMenuPos(null);
-      }
-    };
-    document.addEventListener("keydown", onKeyDown, true);
-    onCleanup(() => document.removeEventListener("keydown", onKeyDown, true));
-  });
 
   return (
     <>
@@ -75,43 +63,28 @@ export function SpeakerSelect(props: { ctx: Ctx; segKey: number; speakerId: numb
       </button>
       <Show when={menuPos()}>
         {(pos) => (
-          <Portal>
-            <div
-              class="fixed inset-0 z-40"
-              onPointerDown={(e) => {
-                e.stopPropagation();
-                setMenuPos(null);
+          <ContextMenu pos={pos()} onClose={() => setMenuPos(null)}>
+            <For each={store.doc.speakers}>
+              {(sp) => {
+                const c = () => speakerColor(store.doc.speakers, sp.id);
+                const current = () => sp.id === props.speakerId;
+                return (
+                  <MenuItem onSelect={() => pick(sp.id)}>
+                    <span
+                      class="h-2 w-2 shrink-0 rounded-full"
+                      style={{ "background-color": c() }}
+                    />
+                    <span class="truncate" style={{ color: current() ? c() : undefined }}>
+                      {sp.label}
+                    </span>
+                    <Show when={current()}>
+                      <span class="ml-auto pl-2 text-zinc-400">✓</span>
+                    </Show>
+                  </MenuItem>
+                );
               }}
-            />
-            <div
-              class="alder-root fixed z-50 min-w-32 rounded-md border border-zinc-700 bg-zinc-800 py-1 font-sans text-xs text-zinc-100 shadow-xl shadow-black/40"
-              style={{ left: `${pos().x}px`, top: `${pos().y}px` }}
-            >
-              <For each={store.doc.speakers}>
-                {(sp) => {
-                  const c = () => speakerColor(store.doc.speakers, sp.id);
-                  const current = () => sp.id === props.speakerId;
-                  return (
-                    <button
-                      class="flex w-full cursor-pointer items-center gap-2 px-2 py-1 text-left hover:bg-zinc-700"
-                      onClick={() => pick(sp.id)}
-                    >
-                      <span
-                        class="h-2 w-2 shrink-0 rounded-full"
-                        style={{ "background-color": c() }}
-                      />
-                      <span class="truncate" style={{ color: current() ? c() : undefined }}>
-                        {sp.label}
-                      </span>
-                      <Show when={current()}>
-                        <span class="ml-auto pl-2 text-zinc-400">✓</span>
-                      </Show>
-                    </button>
-                  );
-                }}
-              </For>
-            </div>
-          </Portal>
+            </For>
+          </ContextMenu>
         )}
       </Show>
     </>
