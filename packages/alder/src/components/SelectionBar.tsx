@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { Show } from "solid-js";
 import type { Ctx } from "./ctx";
 
 const btn =
@@ -29,20 +29,6 @@ export function SelectionBar(props: { ctx: Ctx }) {
             <span class="font-medium text-zinc-300">
               {sel()!.wordIdx != null ? "Word" : "Segment"}
             </span>
-            <label class="flex items-center gap-1">
-              speaker
-              <select
-                class="rounded border border-zinc-700 bg-zinc-800 px-1 py-0.5 text-xs"
-                value={s().speaker_id}
-                onChange={(e) =>
-                  store.setSegmentSpeaker(s().key, Number(e.currentTarget.value))
-                }
-              >
-                <For each={store.doc.speakers}>
-                  {(sp) => <option value={sp.id}>{sp.label}</option>}
-                </For>
-              </select>
-            </label>
             <Show when={sel()!.wordIdx != null}>
               <button
                 class={btn}

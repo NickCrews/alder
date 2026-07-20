@@ -17,9 +17,6 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
   const left = () => props.ctx.x(start());
   const width = () => Math.max(props.ctx.x(end()) - left(), 10);
   const color = () => speakerColor(store.doc.speakers, props.seg.speaker_id);
-  const label = () =>
-    store.doc.speakers.find((s) => s.id === props.seg.speaker_id)?.label ??
-    `#${props.seg.speaker_id}`;
   const selected = () => store.selection()?.segKey === props.seg.key;
   const visible = () => {
     const v = props.ctx.view();
@@ -62,12 +59,45 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
         }}
       >
         <div
-          class="cursor-grab touch-none truncate px-1 text-[10px] leading-4 font-medium select-none active:cursor-grabbing"
-          style={{ height: `${LABEL_HEIGHT}px`, color: color() }}
+          class="flex cursor-grab touch-none items-center px-1 select-none active:cursor-grabbing"
+          style={{ height: `${LABEL_HEIGHT}px` }}
           onPointerDown={onPointerDown}
           title="Drag to move segment in time; click to select"
         >
-          {label()}
+          <span class="relative inline-flex max-w-full items-center">
+            <select
+              class="max-w-full cursor-pointer appearance-none truncate rounded border pl-1 pr-3.5 text-[10px] leading-[13px] font-medium outline-none hover:brightness-125"
+              style={{
+                color: color(),
+                "border-color": color() + "66",
+                "background-color": color() + "22",
+              }}
+              value={props.seg.speaker_id}
+              title="Change speaker"
+              onPointerDown={(e) => e.stopPropagation()}
+              onChange={(e) =>
+                store.setSegmentSpeaker(props.seg.key, Number(e.currentTarget.value))
+              }
+            >
+              <For each={store.doc.speakers}>
+                {(sp) => (
+                  <option class="bg-zinc-900 text-zinc-100" value={sp.id}>
+                    {sp.label}
+                  </option>
+                )}
+              </For>
+            </select>
+            <svg
+              class="pointer-events-none absolute right-1 h-2 w-2"
+              style={{ color: color() }}
+              viewBox="0 0 8 8"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+            >
+              <path d="M1.5 3l2.5 2.5L6.5 3" />
+            </svg>
+          </span>
         </div>
         <div class="relative" style={{ height: `${LANE_HEIGHT - 8 - LABEL_HEIGHT}px` }}>
           <Index each={props.seg.words}>
