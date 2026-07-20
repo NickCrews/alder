@@ -104,8 +104,22 @@ export function Annotator(props: AnnotatorProps) {
       e.preventDefault();
       if (sel.wordIdx != null) store.deleteWord(sel.segKey, sel.wordIdx);
       else store.deleteSegment(sel.segKey);
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      if (!store.selection()) return;
+      e.preventDefault();
+      store.selectAdjacentWord(e.key === "ArrowRight" ? 1 : -1);
+    } else if (e.key === "Enter") {
+      const sel = store.selection();
+      if (sel?.wordIdx == null) return;
+      e.preventDefault();
+      store.requestWordEdit(sel.segKey, sel.wordIdx, null);
     } else if (e.key === "Escape") {
       store.setSelection(null);
+    } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const sel = store.selection();
+      if (sel?.wordIdx == null) return;
+      e.preventDefault();
+      store.requestWordEdit(sel.segKey, sel.wordIdx, e.key);
     }
   }
 

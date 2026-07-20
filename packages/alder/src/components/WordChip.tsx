@@ -1,8 +1,13 @@
-import { Show, createSignal } from "solid-js";
+import { Show, createEffect, createSignal } from "solid-js";
 import type { Ctx } from "./ctx";
 import type { SegRec } from "../store";
 import { startDrag } from "../drag";
 import { wordEnd } from "../time";
+
+type EditMode =
+  | { mode: "all" } // double-click: select the existing text
+  | { mode: "end" } // Enter: caret after the existing text
+  | { mode: "replace"; seed: string }; // typed: replace text with the seed
 
 export function WordChip(props: {
   ctx: Ctx;
@@ -13,7 +18,7 @@ export function WordChip(props: {
   color: string;
 }) {
   const { store } = props.ctx;
-  const [editing, setEditing] = createSignal(false);
+  const [editing, setEditing] = createSignal<EditMode | null>(null);
   let inputEl: HTMLInputElement | undefined;
 
   const word = () => props.seg.words[props.index];
@@ -27,6 +32,13 @@ export function WordChip(props: {
     const sel = store.selection();
     return sel?.segKey === props.seg.key && sel.wordIdx === props.index;
   };
+
+  createEffect(() => {
+    const req = store.editRequest();
+    if (!req || req.segKey !== props.seg.key || req.wordIdx !== props.index) return;
+    store.setEditRequest(null);
+    setEditing(req.seed != null ? { mode: "replace", seed: req.seed } : { mode: "end" });
+  });
 
   function onPointerDown(e: PointerEvent) {
     if (editing()) return;
@@ -46,7 +58,7 @@ export function WordChip(props: {
   }
 
   function commit(value: string) {
-    setEditing(false);
+    setEditing(null);
     store.commitWordText(props.seg.key, props.index, value);
   }
 
@@ -56,7 +68,7 @@ export function WordChip(props: {
     if (e.key === "Enter") {
       commit(el.value);
     } else if (e.key === "Escape") {
-      setEditing(false);
+      setEditing(null);
     } else if (
       e.key === "Backspace" &&
       el.selectionStart === 0 &&
@@ -64,7 +76,7 @@ export function WordChip(props: {
       props.index > 0
     ) {
       e.preventDefault();
-      setEditing(false);
+      setEditing(null);
       store.joinWithPrev(props.seg.key, props.index, el.value);
     }
   }
@@ -83,7 +95,7 @@ export function WordChip(props: {
       onPointerDown={onPointerDown}
       onDblClick={(e) => {
         e.stopPropagation();
-        setEditing(true);
+        setEditing({ mode: "all" });
       }}
     >
       <Show
@@ -95,7 +107,15 @@ export function WordChip(props: {
             inputEl = el;
             queueMicrotask(() => {
               el.focus();
-              el.select();
+              const ed = editing();
+              if (ed?.mode === "replace") {
+                el.value = ed.seed;
+                el.setSelectionRange(ed.seed.length, ed.seed.length);
+              } else if (ed?.mode === "end") {
+                el.setSelectionRange(el.value.length, el.value.length);
+              } else {
+                el.select();
+              }
             });
           }}
           class="h-full min-w-16 rounded-sm bg-zinc-800 px-1 text-xs text-white outline-none"

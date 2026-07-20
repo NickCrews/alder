@@ -147,6 +147,44 @@ describe("store ops", () => {
     });
   });
 
+  it("moves word selection across segment boundaries in time order", () => {
+    withStore((s) => {
+      const [segA, segB] = s.doc.segments;
+      s.setSelection({ segKey: segA.key, wordIdx: 1 });
+      s.selectAdjacentWord(1);
+      expect(s.selection()).toEqual({ segKey: segA.key, wordIdx: 2 });
+      s.selectAdjacentWord(1); // off the end of segA -> first word of segB
+      expect(s.selection()).toEqual({ segKey: segB.key, wordIdx: 0 });
+      s.selectAdjacentWord(1); // no segment after segB -> stays put
+      expect(s.selection()).toEqual({ segKey: segB.key, wordIdx: 0 });
+      s.selectAdjacentWord(-1); // back to last word of segA
+      expect(s.selection()).toEqual({ segKey: segA.key, wordIdx: 2 });
+    });
+  });
+
+  it("resolves a segment selection to its first/last word on arrow", () => {
+    withStore((s) => {
+      const segA = s.doc.segments[0];
+      s.setSelection({ segKey: segA.key, wordIdx: null });
+      s.selectAdjacentWord(1);
+      expect(s.selection()).toEqual({ segKey: segA.key, wordIdx: 0 });
+      s.setSelection({ segKey: segA.key, wordIdx: null });
+      s.selectAdjacentWord(-1);
+      expect(s.selection()).toEqual({ segKey: segA.key, wordIdx: 2 });
+    });
+  });
+
+  it("requestWordEdit selects the word and exposes the request once", () => {
+    withStore((s) => {
+      const key = s.doc.segments[0].key;
+      s.requestWordEdit(key, 1, "x");
+      expect(s.selection()).toEqual({ segKey: key, wordIdx: 1 });
+      expect(s.editRequest()).toEqual({ segKey: key, wordIdx: 1, seed: "x" });
+      s.setEditRequest(null); // consumer (WordChip) clears it
+      expect(s.editRequest()).toBeNull();
+    });
+  });
+
   it("fires onChange on committed ops only", () => {
     createRoot((dispose) => {
       let count = 0;

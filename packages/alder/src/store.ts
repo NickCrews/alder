@@ -19,6 +19,10 @@ export interface Doc {
 
 export type Selection = { segKey: number; wordIdx: number | null } | null;
 
+/** Ask the matching WordChip to enter edit mode. `seed` replaces the text
+ * (typed-to-edit); null keeps it with the caret at the end (Enter-to-edit). */
+export type EditRequest = { segKey: number; wordIdx: number; seed: string | null } | null;
+
 const MAX_HISTORY = 200;
 
 export type AnnotatorStore = ReturnType<typeof createAnnotatorStore>;
@@ -42,6 +46,7 @@ export function createAnnotatorStore(
     segments: initial.segments.map(toRec),
   });
   const [selection, setSelection] = createSignal<Selection>(null);
+  const [editRequest, setEditRequest] = createSignal<EditRequest>(null);
   const [histVersion, setHistVersion] = createSignal(0);
 
   const undoStack: Doc[] = [];
@@ -283,6 +288,31 @@ export function createAnnotatorStore(
     endOp();
   }
 
+  /** Move the selection to the previous/next word, crossing into the
+   * neighboring segment (in time order) at segment boundaries. A selected
+   * segment (wordIdx null) resolves to its first/last word. */
+  function selectAdjacentWord(dir: 1 | -1) {
+    const sel = selection();
+    if (!sel) return;
+    const ordered = [...doc.segments].sort((a, b) => segStart(a) - segStart(b));
+    const si = ordered.findIndex((s) => s.key === sel.segKey);
+    if (si < 0) return;
+    const seg = ordered[si];
+    const wi = (sel.wordIdx ?? (dir > 0 ? -1 : seg.words.length)) + dir;
+    if (wi >= 0 && wi < seg.words.length) {
+      setSelection({ segKey: seg.key, wordIdx: wi });
+      return;
+    }
+    const next = ordered[si + dir];
+    if (!next || !next.words.length) return;
+    setSelection({ segKey: next.key, wordIdx: dir > 0 ? 0 : next.words.length - 1 });
+  }
+
+  function requestWordEdit(segKey: number, wordIdx: number, seed: string | null) {
+    setSelection({ segKey, wordIdx });
+    setEditRequest({ segKey, wordIdx, seed });
+  }
+
   // ---- speakers ----
 
   const nextSpeakerId = (speakers: Speaker[]) =>
@@ -360,6 +390,10 @@ export function createAnnotatorStore(
     duration,
     selection,
     setSelection,
+    selectAdjacentWord,
+    editRequest,
+    setEditRequest,
+    requestWordEdit,
     getSeg,
     beginOp,
     endOp,
