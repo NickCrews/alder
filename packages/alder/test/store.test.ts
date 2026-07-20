@@ -159,6 +159,20 @@ describe("store ops", () => {
     });
   });
 
+  it("deleting a word selects the previous word, crossing segments", () => {
+    withStore((s) => {
+      const [segA, segB] = s.doc.segments;
+      s.deleteWord(segA.key, 2); // "world" -> lands on "there"
+      expect(s.selection()).toEqual({ segKey: segA.key, wordIdx: 1 });
+      s.deleteWord(segB.key, 0); // segB's only word -> lands on last word of segA
+      expect(s.selection()).toEqual({ segKey: segA.key, wordIdx: 1 });
+      s.deleteWord(segA.key, 1);
+      expect(s.selection()).toEqual({ segKey: segA.key, wordIdx: 0 });
+      s.deleteWord(segA.key, 0); // nothing before the first word
+      expect(s.selection()).toBeNull();
+    });
+  });
+
   it("committing empty text deletes the word", () => {
     withStore((s) => {
       const key = s.doc.segments[0].key;

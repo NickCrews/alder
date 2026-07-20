@@ -288,6 +288,16 @@ export function createAnnotatorStore(
   function deleteWord(key: number, i: number) {
     const idx = segIndex(key);
     if (idx < 0) return;
+    // Land on the previous word (crossing segments) so repeated Delete keeps eating backwards.
+    let after: Selection = null;
+    if (i > 0) {
+      after = { segKey: key, wordIdx: i - 1 };
+    } else {
+      const ordered = [...doc.segments].sort((a, b) => segStart(a) - segStart(b));
+      const si = ordered.findIndex((s) => s.key === key);
+      const prev = ordered[si - 1];
+      if (prev?.words.length) after = { segKey: prev.key, wordIdx: prev.words.length - 1 };
+    }
     beginOp();
     setDoc(
       produce((d) => {
@@ -296,7 +306,7 @@ export function createAnnotatorStore(
         if (!seg.words.length) d.segments.splice(idx, 1);
       }),
     );
-    setSelection(null);
+    setSelection(after);
     endOp();
   }
 
