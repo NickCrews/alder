@@ -105,17 +105,20 @@ export default {
 
 ## UI
 
+I really tried to sweat the details to make the annotation process as delightful as possible.
+
 - **Waveform**: click to seek, drag to pan, scroll/pinch to zoom (anchored at
-  cursor), red playhead follows playback. Space = play/pause.
+  cursor), red playhead follows playback. Space = play/pause. Choose playback speed.
 - **Tracks**: segments are packed greedily into lanes — overlapping speech
   stacks, alternating speakers share a lane. Colors are per-speaker.
 - **Words**: drag to retime (clamped between neighbors); double-click to edit
   text — a space splits the word (timestamps interpolated), Backspace at the
-  start joins into the previous word, empty text deletes.
-- **Segments**: drag the label strip to shift the whole segment in time; with a
-  selection, the bottom bar offers speaker reassignment, split-before-word,
-  merge-with-next (same speaker), and delete. Right-click empty track space to
-  create a segment.
+  start joins into the previous word, empty text deletes. Arrow key nav.
+  shift+click and ctrl+click multiselection works.
+- **Segments**: drag the label strip to shift the whole segment in time.
+   Right-click empty track space to create a segment.
+   Select multiple and then click to merge them.
+   Right click to split a segment at that timestamp.
 - **Speakers**: add / rename (double-click) / delete (only when unused).
 - **Copy/paste**: ⌘C writes the selection as text (plus HTML with speaker labels
   when whole segments are selected). ⌘V overlays the pasted words onto the
