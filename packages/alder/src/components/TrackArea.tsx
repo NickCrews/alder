@@ -9,8 +9,12 @@ import { startDrag } from "../drag";
 import { WordChip } from "./WordChip";
 import { SpeakerSelect } from "./SpeakerSelect";
 
-export const LANE_HEIGHT = 60;
-const LABEL_HEIGHT = 16;
+export const LANE_HEIGHT = 72;
+const LABEL_HEIGHT = 20;
+/** Vertical gap between a segment block and its lane edges. */
+const LANE_PAD = 4;
+/** Empty strip below the last lane — the double-click-to-add target when lanes are full. */
+const TRACK_PAD = 20;
 
 function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
   const { store } = props.ctx;
@@ -87,21 +91,21 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
   return (
     <Show when={visible()}>
       <div
-        class="absolute overflow-hidden rounded border"
+        class="absolute rounded border hover:z-20"
         classList={{ "z-10": selected() }}
         onContextMenu={onContextMenu}
         style={{
           left: `${left()}px`,
           width: `${width()}px`,
-          top: `${props.lane * LANE_HEIGHT + 4}px`,
-          height: `${LANE_HEIGHT - 8}px`,
+          top: `${props.lane * LANE_HEIGHT + LANE_PAD}px`,
+          height: `${LANE_HEIGHT - LANE_PAD * 2}px`,
           "background-color": color() + "1e",
           "border-color": selected() ? color() : color() + "55",
           "box-shadow": selected() ? `0 0 0 1px ${color()}` : "none",
         }}
       >
         <div
-          class="flex cursor-grab touch-none items-center px-1 select-none active:cursor-grabbing"
+          class="flex cursor-grab touch-none items-center gap-1 px-1.5 select-none active:cursor-grabbing"
           style={{ height: `${LABEL_HEIGHT}px` }}
           onPointerDown={onPointerDown}
           title="Drag to move segment in time; click to select; ⇧-click to select a range, ⌥-click to toggle"
@@ -118,7 +122,7 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
             onClick={() => store.deleteSegment(props.seg.key)}
           >
             <svg
-              class="h-2.5 w-2.5"
+              class="h-3 w-3"
               viewBox="0 0 12 12"
               fill="none"
               stroke="currentColor"
@@ -129,7 +133,10 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
             </svg>
           </button>
         </div>
-        <div class="relative" style={{ height: `${LANE_HEIGHT - 8 - LABEL_HEIGHT}px` }}>
+        <div
+          class="relative"
+          style={{ height: `${LANE_HEIGHT - LANE_PAD * 2 - LABEL_HEIGHT}px` }}
+        >
           <Index each={props.seg.words}>
             {(_, i) => (
               <WordChip
@@ -188,7 +195,7 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
 export function TrackArea(props: { ctx: Ctx }) {
   const { store } = props.ctx;
   const lanes = createMemo(() => assignLanes(store.doc.segments));
-  const height = () => lanes().count * LANE_HEIGHT + 24;
+  const height = () => lanes().count * LANE_HEIGHT + TRACK_PAD;
 
   function onDblClick(e: MouseEvent) {
     if (e.target !== e.currentTarget) return;

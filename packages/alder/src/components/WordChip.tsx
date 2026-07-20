@@ -19,6 +19,7 @@ export function WordChip(props: {
 }) {
   const { store } = props.ctx;
   const [editing, setEditing] = createSignal<EditMode | null>(null);
+  const [hovered, setHovered] = createSignal(false);
   let inputEl: HTMLInputElement | undefined;
 
   const word = () => props.seg.words[props.index];
@@ -32,6 +33,21 @@ export function WordChip(props: {
     const sel = store.selection();
     return sel?.segKey === props.seg.key && sel.wordIdx === props.index;
   };
+  // Shrink the label (down to a floor) when the chip is too narrow for it at
+  // the default 12px. 0.58 approximates average glyph width per px of font-size.
+  const fontSize = () => {
+    const chars = word().text.length || 1;
+    const avail = width() - 8; // minus px-1 padding on both sides
+    return Math.max(8, Math.min(12, avail / (chars * 0.58)));
+  };
+  // Selected chips expand inline: anchored at the word's timestamp, growing
+  // rightward over neighbors so the word reads at full size while you work on it.
+  const expanded = () => !editing() && selected();
+  // Hovered chips instead float a full-size label above the row, where the
+  // mouse cursor can't cover it (the chip stays put as the hover target).
+  // Skipped for words already readable at full size, and for the selected word
+  // (its inline expansion already shows the text).
+  const hoverLabel = () => !editing() && hovered() && !selected() && fontSize() < 12;
 
   createEffect(() => {
     const req = store.editRequest();
@@ -83,24 +99,51 @@ export function WordChip(props: {
 
   return (
     <div
-      class="absolute top-0.5 h-6 cursor-grab touch-none rounded-sm border text-xs leading-6 text-zinc-100 active:cursor-grabbing"
-      classList={{ "ring-1 ring-white z-10": selected() }}
+      class="absolute inset-y-0.5 flex cursor-grab touch-none items-center rounded-sm border text-xs text-zinc-100 active:cursor-grabbing"
+      classList={{
+        "ring-1 ring-white": selected(),
+        "z-10": expanded() || hoverLabel(),
+        "shadow-md shadow-black/50": expanded(),
+      }}
       style={{
         left: `${left()}px`,
-        width: editing() ? "auto" : `${width()}px`,
-        "background-color": props.color + "55",
+        width: editing() ? "auto" : expanded() ? "max-content" : `${width()}px`,
+        "min-width": expanded() ? `${width()}px` : undefined,
+        "background-color": expanded()
+          ? `color-mix(in srgb, ${props.color} 35%, #18181b)`
+          : props.color + "55",
         "border-color": props.color + "88",
       }}
       title={`${word().text} @ ${word().timestamp.toFixed(2)}s`}
       onPointerDown={onPointerDown}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
       onDblClick={(e) => {
         e.stopPropagation();
         setEditing({ mode: "all" });
       }}
     >
+      <Show when={hoverLabel()}>
+        <div
+          class="pointer-events-none absolute bottom-full left-0 mb-1 w-max rounded-sm border px-1 shadow-md shadow-black/50"
+          style={{
+            "background-color": `color-mix(in srgb, ${props.color} 35%, #18181b)`,
+            "border-color": props.color + "88",
+          }}
+        >
+          {word().text}
+        </div>
+      </Show>
       <Show
         when={editing()}
-        fallback={<span class="block truncate px-1 select-none">{word().text}</span>}
+        fallback={
+          <span
+            class="w-full truncate px-1 select-none"
+            style={{ "font-size": expanded() ? undefined : `${fontSize()}px` }}
+          >
+            {word().text}
+          </span>
+        }
       >
         <input
           ref={(el) => {

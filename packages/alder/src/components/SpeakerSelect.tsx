@@ -48,7 +48,7 @@ export function SpeakerSelect(props: { ctx: Ctx; segKey: number; speakerId: numb
     <>
       <button
         ref={btnRef}
-        class="inline-flex max-w-full cursor-pointer items-center gap-1 rounded border px-1 text-[10px] leading-[13px] font-medium hover:brightness-125 focus:outline-none"
+        class="inline-flex max-w-full cursor-pointer items-center gap-1 rounded border px-1.5 text-[11px] leading-4 font-medium hover:brightness-125 focus:outline-none"
         style={{
           color: color(),
           "border-color": color() + "66",
