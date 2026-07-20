@@ -1,0 +1,24 @@
+{
+  "name": "@nickcrews/alder-standalone",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "echo 'no tests'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nickcrews/alder": "workspace:*",
+    "solid-js": "^1.9.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.11",
+    "tailwindcss": "^4.1.11",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vite-plugin-singlefile": "^2.2.0",
+    "vite-plugin-solid": "^2.11.6"
+  }
+}
