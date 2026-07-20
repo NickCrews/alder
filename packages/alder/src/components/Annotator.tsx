@@ -3,6 +3,7 @@ import type { AnnotationState } from "../types";
 import { createAnnotatorStore } from "../store";
 import { createPlayer } from "../player";
 import { clamp } from "../time";
+import { runsToHtml, runsToText } from "../clipboard";
 import { ensureStyles } from "../ensureStyles";
 import type { Ctx, Guide, Viewport } from "./ctx";
 import { Toolbar } from "./Toolbar";
@@ -99,9 +100,38 @@ export function Annotator(props: AnnotatorProps) {
     }
   }
 
-  const isEditableTarget = (e: KeyboardEvent) =>
+  const isEditableTarget = (e: Event) =>
     (e.target as HTMLElement | null)?.closest("input, textarea, select, [contenteditable]") !=
     null;
+
+  /** ⌘C writes the clipboard directly: writing needs only a user gesture, and
+   * it's the one API that carries both flavors. (Reading is the gated
+   * direction — hence the `paste` listener below rather than `readText`.) */
+  function copySelection() {
+    const runs = store.copyRuns();
+    if (!runs.length) return false;
+    const items: Record<string, Blob> = {
+      "text/plain": new Blob([runsToText(runs)], { type: "text/plain" }),
+    };
+    // Only worth labeling when whole segments are in play; otherwise the HTML
+    // says nothing the plain text doesn't.
+    if (runs.some((r) => r.label)) {
+      items["text/html"] = new Blob([runsToHtml(runs)], { type: "text/html" });
+    }
+    void navigator.clipboard?.write?.([new ClipboardItem(items)]).catch(() => {});
+    return true;
+  }
+
+  /** ⌘V arrives as a real paste event — it bubbles to `document` even with
+   * focus on `<body>`, giving us the data synchronously and with no permission
+   * prompt, which `navigator.clipboard.readText()` cannot do. */
+  function onPaste(e: ClipboardEvent) {
+    if (isEditableTarget(e)) return;
+    const text = e.clipboardData?.getData("text/plain");
+    if (!text) return;
+    e.preventDefault();
+    store.pasteText(text, player.time());
+  }
 
   function onKeyDown(e: KeyboardEvent) {
     if (isEditableTarget(e)) return;
@@ -111,6 +141,9 @@ export function Annotator(props: AnnotatorProps) {
     } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
       e.preventDefault();
       e.shiftKey ? store.redo() : store.undo();
+    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
+      // Nothing selected: leave the keystroke to the browser.
+      if (copySelection()) e.preventDefault();
     } else if (e.key === "Delete" || e.key === "Backspace") {
       if (!store.selection()) return;
       e.preventDefault();
@@ -138,7 +171,11 @@ export function Annotator(props: AnnotatorProps) {
 
   onMount(() => {
     document.addEventListener("keydown", onKeyDown);
-    onCleanup(() => document.removeEventListener("keydown", onKeyDown));
+    document.addEventListener("paste", onPaste);
+    onCleanup(() => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("paste", onPaste);
+    });
   });
 
   const playheadX = () => x(player.time());

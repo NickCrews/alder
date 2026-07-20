@@ -1,7 +1,8 @@
 import { createMemo, createSignal } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 import type { AnnotationState, Speaker, Word } from "./types";
-import { MIN_GAP, clamp, lastWordDuration, segStart, wordEnd } from "./time";
+import { MIN_GAP, clamp, lastWordDuration, segEnd, segStart, wordEnd } from "./time";
+import { type CopyRun, tokenize } from "./clipboard";
 
 let nextKey = 1;
 
@@ -462,6 +463,171 @@ export function createAnnotatorStore(
     endOp();
   }
 
+  // ---- clipboard ----
+
+  /** The selection as runs of adjacent words, in `orderedWords` order. A
+   * wholly selected segment contributes all its words and carries its speaker
+   * label; loose words contribute the stretches they form. */
+  function copyRuns(): CopyRun[] {
+    const sel = selectedItems();
+    const wholeSegs = new Set(sel.filter((i) => i.wordIdx == null).map((i) => i.segKey));
+    const loose = new Set(sel.filter(isWordItem).map(itemKey));
+    const runs: CopyRun[] = [];
+    for (const seg of orderedSegs()) {
+      if (wholeSegs.has(seg.key)) {
+        if (seg.words.length) {
+          runs.push({
+            label: doc.speakers.find((s) => s.id === seg.speaker_id)?.label,
+            words: seg.words.map((w) => w.text),
+          });
+        }
+        continue;
+      }
+      let run: CopyRun | null = null;
+      seg.words.forEach((w, i) => {
+        if (!loose.has(itemKey({ segKey: seg.key, wordIdx: i }))) {
+          run = null;
+          return;
+        }
+        if (!run) runs.push((run = { words: [] }));
+        run.words.push(w.text);
+      });
+    }
+    return runs;
+  }
+
+  /** Every word the selection covers — deduped and ordered by `orderedWords`,
+   * so a segment selected whole and a word inside it yield one slot, not two. */
+  function selectedSlots(): WordRef[] {
+    const sel = selectedItems();
+    const wholeSegs = new Set(sel.filter((i) => i.wordIdx == null).map((i) => i.segKey));
+    const loose = new Set(sel.filter(isWordItem).map(itemKey));
+    return orderedWords().filter((w) => wholeSegs.has(w.segKey) || loose.has(itemKey(w)));
+  }
+
+  /** Overlay `text` onto the selection, one pasted word per selected word, in
+   * time order. Each word inherits the timestamp of the slot it lands on —
+   * real ASR timings, which beat anything we could interpolate, because a
+   * correction usually lines up with the words it replaces.
+   *
+   * The selection is the whole blast radius, so the ends are bounded rather
+   * than spilling like a spreadsheet would: surplus words subdivide the final
+   * slot over its own span, and slots the text doesn't reach are deleted.
+   * (With one slot selected that subdivision is exactly `commitWordText` — the
+   * same operation, reached a different way.)
+   *
+   * Slots spanning a segment boundary land in their respective segments and so
+   * take on those speakers. With nothing selected the text becomes a new
+   * segment at `atTime`. */
+  function pasteText(text: string, atTime: number) {
+    const tokens = tokenize(text);
+    const slots = selectedSlots();
+    if (!slots.length) return pasteAsSegment(tokens, atTime);
+    if (!tokens.length) return deleteItems(selectedItems());
+
+    const m = slots.length;
+    const n = tokens.length;
+    // Slot k takes token k; the last slot soaks up every leftover token, and
+    // any slot the tokens never reach is dropped.
+    const textsFor = (k: number): string[] | null =>
+      k < m - 1 ? (k < n ? [tokens[k]] : null) : n >= m ? tokens.slice(m - 1) : null;
+
+    const bySeg = new Map<number, { idx: number; texts: string[] | null }[]>();
+    slots.forEach((slot, k) => {
+      const list = bySeg.get(slot.segKey) ?? [];
+      list.push({ idx: slot.wordIdx, texts: textsFor(k) });
+      bySeg.set(slot.segKey, list);
+    });
+
+    beginOp();
+    setDoc(
+      produce((d) => {
+        for (const seg of d.segments) {
+          const ops = bySeg.get(seg.key);
+          if (!ops) continue;
+          // Back to front: splices then can't shift an index we've yet to use.
+          for (let j = ops.length - 1; j >= 0; j--) {
+            const { idx, texts } = ops[j];
+            const w = seg.words[idx];
+            if (!w) continue;
+            if (!texts) {
+              seg.words.splice(idx, 1);
+            } else if (texts.length === 1) {
+              w.text = texts[0];
+            } else {
+              const span = wordEnd(seg.words, idx, lastWordDur()) - w.timestamp;
+              seg.words.splice(
+                idx,
+                1,
+                ...texts.map((t, e) => ({
+                  timestamp: w.timestamp + (span * e) / texts.length,
+                  text: t,
+                })),
+              );
+            }
+          }
+        }
+        for (let i = d.segments.length - 1; i >= 0; i--) {
+          if (!d.segments[i].words.length) d.segments.splice(i, 1);
+        }
+      }),
+    );
+
+    // Surviving slots keep their indices: dropped slots are always a suffix in
+    // time order, hence the highest indices in their segment, and the only
+    // slot that grows is the last one.
+    const after: Item[] = [];
+    slots.forEach((slot, k) => {
+      if (k < m - 1) {
+        if (k < n) after.push(slot);
+      } else if (n >= m) {
+        for (let e = 0; e <= n - m; e++) {
+          after.push({ segKey: slot.segKey, wordIdx: slot.wordIdx + e });
+        }
+      }
+    });
+    setItems(after);
+    endOp();
+  }
+
+  /** Pasting with nothing selected: a new segment at the playhead, attributed
+   * to whoever the timeline says is talking there, its words spaced by the
+   * file's median word gap — squeezed evenly if the clip ends first. */
+  function pasteAsSegment(tokens: string[], atTime: number) {
+    if (!tokens.length) return;
+    beginOp();
+    const n = tokens.length;
+    let start = clamp(atTime, 0, duration);
+    let gap = Math.min(lastWordDur(), (duration - start) / n);
+    if (gap < MIN_GAP) {
+      gap = MIN_GAP;
+      start = clamp(duration - n * gap, 0, duration);
+    }
+    const segs = orderedSegs();
+    const covering = segs.find(
+      (s) => segStart(s) <= start && segEnd(s, lastWordDur()) >= start,
+    );
+    const preceding = segs.filter((s) => segStart(s) <= start).pop();
+    let spId = covering?.speaker_id ?? preceding?.speaker_id ?? doc.speakers[0]?.id;
+    let newKey = 0;
+    setDoc(
+      produce((d) => {
+        if (spId == null) {
+          spId = nextSpeakerId(d.speakers);
+          d.speakers.push({ id: spId, label: `Speaker ${spId + 1}` });
+        }
+        newKey = nextKey++;
+        d.segments.push({
+          key: newKey,
+          speaker_id: spId,
+          words: tokens.map((t, k) => ({ timestamp: start + gap * k, text: t })),
+        });
+      }),
+    );
+    setSelection({ segKey: newKey, wordIdx: null });
+    endOp();
+  }
+
   /** Move the selection to the previous/next word, crossing into the
    * neighboring segment (in time order) at segment boundaries. A selected
    * segment (wordIdx null) resolves to its first/last word. */
@@ -613,6 +779,8 @@ export function createAnnotatorStore(
     deleteSelection,
     commitWordText,
     joinWithPrev,
+    copyRuns,
+    pasteText,
     addSpeaker,
     renameSpeaker,
     speakerInUse,
