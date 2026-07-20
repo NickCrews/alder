@@ -6,6 +6,7 @@ import { segEnd, segStart } from "../time";
 import { speakerColor } from "../colors";
 import { startDrag } from "../drag";
 import { WordChip } from "./WordChip";
+import { SpeakerSelect } from "./SpeakerSelect";
 
 export const LANE_HEIGHT = 60;
 const LABEL_HEIGHT = 16;
@@ -64,40 +65,11 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
           onPointerDown={onPointerDown}
           title="Drag to move segment in time; click to select"
         >
-          <span class="relative inline-flex max-w-full items-center">
-            <select
-              class="max-w-full cursor-pointer appearance-none truncate rounded border pl-1 pr-3.5 text-[10px] leading-[13px] font-medium outline-none hover:brightness-125"
-              style={{
-                color: color(),
-                "border-color": color() + "66",
-                "background-color": color() + "22",
-              }}
-              value={props.seg.speaker_id}
-              title="Change speaker"
-              onPointerDown={(e) => e.stopPropagation()}
-              onChange={(e) =>
-                store.setSegmentSpeaker(props.seg.key, Number(e.currentTarget.value))
-              }
-            >
-              <For each={store.doc.speakers}>
-                {(sp) => (
-                  <option class="bg-zinc-900 text-zinc-100" value={sp.id}>
-                    {sp.label}
-                  </option>
-                )}
-              </For>
-            </select>
-            <svg
-              class="pointer-events-none absolute right-1 h-2 w-2"
-              style={{ color: color() }}
-              viewBox="0 0 8 8"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.5"
-            >
-              <path d="M1.5 3l2.5 2.5L6.5 3" />
-            </svg>
-          </span>
+          <SpeakerSelect
+            ctx={props.ctx}
+            segKey={props.seg.key}
+            speakerId={props.seg.speaker_id}
+          />
         </div>
         <div class="relative" style={{ height: `${LANE_HEIGHT - 8 - LABEL_HEIGHT}px` }}>
           <Index each={props.seg.words}>
