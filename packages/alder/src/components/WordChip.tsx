@@ -26,10 +26,12 @@ export function WordChip(props: {
   const left = () => props.ctx.x(word().timestamp) - props.blockLeft;
   const width = () =>
     Math.max(
-      props.ctx.x(wordEnd(props.seg.words, props.index)) - props.ctx.x(word().timestamp) - 2,
+      props.ctx.x(wordEnd(props.seg.words, props.index, store.lastWordDur())) - props.ctx.x(word().timestamp) - 2,
       6,
     );
-  const selected = () => {
+  const selected = () => store.isWordSelected(props.seg.key, props.index);
+  /** The word the caret is on: the only one that expands, even in a ⇧-arrow range. */
+  const focused = () => {
     const sel = store.selection();
     return sel?.segKey === props.seg.key && sel.wordIdx === props.index;
   };
@@ -42,12 +44,12 @@ export function WordChip(props: {
   };
   // Selected chips expand inline: anchored at the word's timestamp, growing
   // rightward over neighbors so the word reads at full size while you work on it.
-  const expanded = () => !editing() && selected();
+  const expanded = () => !editing() && focused();
   // Hovered chips instead float a full-size label above the row, where the
   // mouse cursor can't cover it (the chip stays put as the hover target).
   // Skipped for words already readable at full size, and for the selected word
   // (its inline expansion already shows the text).
-  const hoverLabel = () => !editing() && hovered() && !selected() && fontSize() < 12;
+  const hoverLabel = () => !editing() && hovered() && !expanded() && fontSize() < 12;
 
   createEffect(() => {
     const req = store.editRequest();
@@ -59,14 +61,31 @@ export function WordChip(props: {
   function onPointerDown(e: PointerEvent) {
     if (editing()) return;
     e.stopPropagation();
+    // Modifier-clicks select rather than drag, so they never retime a word.
+    if (e.button === 0 && (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey)) {
+      const item = { segKey: props.seg.key, wordIdx: props.index };
+      if (e.shiftKey) store.selectRangeTo(item);
+      else store.toggleSelected(item);
+      return;
+    }
     const t0 = word().timestamp;
+    const showGuide = () =>
+      props.ctx.setGuide({
+        start: word().timestamp,
+        end: wordEnd(props.seg.words, props.index, store.lastWordDur()),
+      });
     startDrag(e, {
       onStart: () => {
         store.beginOp();
         store.setSelection({ segKey: props.seg.key, wordIdx: props.index });
+        showGuide();
       },
-      onMove: (dx) => store.moveWord(props.seg.key, props.index, t0 + dx / props.ctx.scale()),
+      onMove: (dx) => {
+        store.moveWord(props.seg.key, props.index, t0 + dx / props.ctx.scale());
+        showGuide();
+      },
       onEnd: (moved) => {
+        props.ctx.setGuide(null);
         if (moved) store.endOp();
         else store.setSelection({ segKey: props.seg.key, wordIdx: props.index });
       },
@@ -110,7 +129,7 @@ export function WordChip(props: {
         width: editing() ? "auto" : expanded() ? "max-content" : `${width()}px`,
         "min-width": expanded() ? `${width()}px` : undefined,
         "background-color":
-          expanded() || editing()
+          expanded() || editing() || selected()
             ? `color-mix(in srgb, ${props.color} 35%, #18181b)`
             : props.color + "55",
         "border-color": props.color + "88",

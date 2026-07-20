@@ -5,7 +5,10 @@ export interface Speaker {
 
 export interface Word {
   /** Seconds since start of clip. A word has no stored end: it extends to the
-   * next word's timestamp, or LAST_WORD_DURATION for a segment's last word. */
+   * next word's timestamp. A segment's last word has no next word, so it runs
+   * for the median word duration across the whole document (see
+   * `lastWordDuration`), falling back to LAST_WORD_DURATION while the document
+   * has no adjacent pair to measure. */
   timestamp: number;
   text: string;
 }

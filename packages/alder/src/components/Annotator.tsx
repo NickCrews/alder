@@ -4,7 +4,7 @@ import { createAnnotatorStore } from "../store";
 import { createPlayer } from "../player";
 import { clamp } from "../time";
 import { ensureStyles } from "../ensureStyles";
-import type { Ctx, Viewport } from "./ctx";
+import type { Ctx, Guide, Viewport } from "./ctx";
 import { Toolbar } from "./Toolbar";
 import { SpeakerBar } from "./SpeakerBar";
 import { Waveform } from "./Waveform";
@@ -36,6 +36,7 @@ export function Annotator(props: AnnotatorProps) {
 
   const [view, setViewRaw] = createSignal<Viewport>({ start: 0, dur: duration });
   const [width, setWidth] = createSignal(800);
+  const [guide, setGuide] = createSignal<Guide | null>(null);
   let bodyRef: HTMLDivElement | undefined;
 
   const setView = (v: Viewport) => {
@@ -46,7 +47,19 @@ export function Annotator(props: AnnotatorProps) {
   const x = (t: number) => (t - view().start) * scale();
   const timeAt = (px: number) => view().start + px / scale();
 
-  const ctx: Ctx = { store, player, view, setView, width, duration, x, timeAt, scale };
+  const ctx: Ctx = {
+    store,
+    player,
+    view,
+    setView,
+    guide,
+    setGuide,
+    width,
+    duration,
+    x,
+    timeAt,
+    scale,
+  };
 
   props.ref?.({ getState: store.getState, setState: store.setState });
 
@@ -99,17 +112,15 @@ export function Annotator(props: AnnotatorProps) {
       e.preventDefault();
       e.shiftKey ? store.redo() : store.undo();
     } else if (e.key === "Delete" || e.key === "Backspace") {
-      const keys = store.selectedSegKeys();
-      const sel = store.selection();
-      if (!keys.length) return;
+      if (!store.selection()) return;
       e.preventDefault();
-      if (keys.length > 1) store.deleteSegments(keys);
-      else if (sel?.wordIdx != null) store.deleteWord(sel.segKey, sel.wordIdx);
-      else store.deleteSegments(keys);
+      store.deleteSelection();
     } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       if (!store.selection()) return;
       e.preventDefault();
-      store.selectAdjacentWord(e.key === "ArrowRight" ? 1 : -1);
+      const dir = e.key === "ArrowRight" ? 1 : -1;
+      if (e.shiftKey) store.extendSelection(dir);
+      else store.selectAdjacentWord(dir);
     } else if (e.key === "Enter") {
       const sel = store.selection();
       if (sel?.wordIdx == null) return;
@@ -146,6 +157,33 @@ export function Annotator(props: AnnotatorProps) {
             class="pointer-events-none absolute inset-y-0 z-20 w-px bg-red-500"
             style={{ left: `${playheadX()}px` }}
           />
+        </Show>
+        <Show when={guide()}>
+          {(g) => (
+            <div class="pointer-events-none absolute inset-y-0 z-30">
+              <div
+                class="absolute inset-y-0 bg-sky-300/10"
+                style={{
+                  left: `${x(g().start)}px`,
+                  width: `${Math.max(x(g().end) - x(g().start), 0)}px`,
+                }}
+              />
+              <div
+                class="absolute inset-y-0 w-px bg-sky-300"
+                style={{ left: `${x(g().start)}px` }}
+              />
+              <div
+                class="absolute inset-y-0 w-px bg-sky-300/60"
+                style={{ left: `${x(g().end)}px` }}
+              />
+              <div
+                class="absolute top-0 rounded-br-sm bg-sky-300 px-1 font-mono text-[10px] text-zinc-900 tabular-nums"
+                style={{ left: `${x(g().start)}px` }}
+              >
+                {g().start.toFixed(2)}s
+              </div>
+            </div>
+          )}
         </Show>
       </div>
       <SelectionBar ctx={ctx} />

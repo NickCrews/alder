@@ -13,7 +13,7 @@ export {
   serializeAnnotation,
   serializeAnnotationString,
 } from "./serde";
-export { LAST_WORD_DURATION, segEnd, segStart, wordEnd } from "./time";
+export { LAST_WORD_DURATION, lastWordDuration, segEnd, segStart, wordEnd } from "./time";
 export { assignLanes } from "./lanes";
 export { createAnnotatorStore } from "./store";
 export type { AnnotatorStore, SegRec, Selection } from "./store";

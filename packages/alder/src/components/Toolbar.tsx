@@ -10,6 +10,16 @@ const btn =
 export function Toolbar(props: { ctx: Ctx }) {
   const { player, store } = props.ctx;
 
+  const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  /** "3 segments", "5 words", or "2 segments + 5 words" for a mixed selection. */
+  const selectionLabel = () => {
+    const segs = store.selectedSegKeys().length;
+    const words = store.selectedWords().length;
+    if (!segs) return plural(words, "word");
+    if (!words) return plural(segs, "segment");
+    return `${plural(segs, "segment")} + ${plural(words, "word")}`;
+  };
+
   function zoom(factor: number) {
     const v = props.ctx.view();
     const center = v.start + v.dur / 2;
@@ -37,18 +47,18 @@ export function Toolbar(props: { ctx: Ctx }) {
       >
         <For each={SPEEDS}>{(s) => <option value={String(s)}>{s}×</option>}</For>
       </select>
-      <Show when={store.selectedSegKeys().length > 1}>
+      <Show when={store.selectedItems().length > 1}>
         <span class="mx-1 h-4 w-px bg-zinc-700" />
-        <span class="text-xs text-zinc-400">
-          {store.selectedSegKeys().length} segments selected
-        </span>
-        <button
-          class="rounded border border-sky-700 bg-sky-900/60 px-2 py-0.5 text-xs text-sky-200 hover:bg-sky-800/60"
-          title="Merge the selected segments into one (earliest segment's speaker wins)"
-          onClick={() => store.mergeSegments(store.selectedSegKeys())}
-        >
-          Merge {store.selectedSegKeys().length}
-        </button>
+        <span class="text-xs text-zinc-400">{selectionLabel()} selected</span>
+        <Show when={store.selectedSegKeys().length > 1}>
+          <button
+            class="rounded border border-sky-700 bg-sky-900/60 px-2 py-0.5 text-xs text-sky-200 hover:bg-sky-800/60"
+            title="Merge the selected segments into one (earliest segment's speaker wins)"
+            onClick={() => store.mergeSegments(store.selectedSegKeys())}
+          >
+            Merge {store.selectedSegKeys().length}
+          </button>
+        </Show>
       </Show>
       <span class="flex-1" />
       <button class={btn} disabled={!store.canUndo()} onClick={() => store.undo()} title="Undo (⌘Z)">

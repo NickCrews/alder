@@ -1,7 +1,7 @@
-import { createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 import type { AnnotationState, Speaker, Word } from "./types";
-import { LAST_WORD_DURATION, MIN_GAP, clamp, segStart, wordEnd } from "./time";
+import { MIN_GAP, clamp, lastWordDuration, segStart, wordEnd } from "./time";
 
 let nextKey = 1;
 
@@ -17,7 +17,16 @@ export interface Doc {
   segments: SegRec[];
 }
 
-export type Selection = { segKey: number; wordIdx: number | null } | null;
+/** A selectable thing: a whole segment (`wordIdx: null`) or one word within it.
+ * Positional — any splice of `seg.words` invalidates outstanding word items. */
+export type Item = { segKey: number; wordIdx: number | null };
+export type WordRef = { segKey: number; wordIdx: number };
+
+export type Selection = Item | null;
+
+const itemKey = (i: Item) => `${i.segKey}:${i.wordIdx ?? "seg"}`;
+const sameItem = (a: Item, b: Item) => a.segKey === b.segKey && a.wordIdx === b.wordIdx;
+const isWordItem = (i: Item): i is WordRef => i.wordIdx != null;
 
 /** Ask the matching WordChip to enter edit mode. `seed` replaces the text
  * (typed-to-edit); null keeps it with the caret at the end (Enter-to-edit). */
@@ -45,54 +54,83 @@ export function createAnnotatorStore(
     speakers: initial.speakers.map((s) => ({ ...s })),
     segments: initial.segments.map(toRec),
   });
+  // The selection is one flat set of items that may freely mix whole segments
+  // and individual words. `selection` is the focus (the item the caret is on,
+  // and what keyboard edits act upon); `multiSel` holds the full set once it
+  // grows past one; `anchor` is the pivot ⇧-ranges extend from.
   const [selection, setSelectionRaw] = createSignal<Selection>(null);
-  const [multiSel, setMultiSel] = createSignal<number[]>([]);
+  const [multiSel, setMultiSel] = createSignal<Item[]>([]);
+  const [anchor, setAnchor] = createSignal<Item | null>(null);
   const [editRequest, setEditRequest] = createSignal<EditRequest>(null);
 
   /** Select a single segment/word (or nothing), collapsing any multi-selection. */
   function setSelection(sel: Selection) {
     setMultiSel([]);
+    setAnchor(null);
     setSelectionRaw(sel);
   }
 
-  /** Keys of all selected segments: the multi-selection if active, else the
-   * single selection's segment. */
-  function selectedSegKeys(): number[] {
+  /** Everything selected: the multi-selection if active, else the lone focus. */
+  function selectedItems(): Item[] {
     const m = multiSel();
     if (m.length) return m;
     const s = selection();
-    return s ? [s.segKey] : [];
+    return s ? [s] : [];
   }
 
-  const isSegSelected = (key: number) => selectedSegKeys().includes(key);
+  const selectedSet = createMemo(() => new Set(selectedItems().map(itemKey)));
+  const isItemSelected = (i: Item) => selectedSet().has(itemKey(i));
 
-  /** Toggle a segment's membership in the multi-selection (⌥/⌘-click). */
-  function toggleSegSelected(key: number) {
-    const cur = selectedSegKeys();
-    const next = cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key];
-    setMultiSel(next);
-    if (!cur.includes(key)) {
-      setSelectionRaw({ segKey: key, wordIdx: null });
-    } else if (selection()?.segKey === key) {
-      setSelectionRaw(next.length ? { segKey: next[next.length - 1], wordIdx: null } : null);
-    }
+  /** Words selected in their own right (not those inside a selected segment). */
+  const selectedWords = (): WordRef[] => selectedItems().filter(isWordItem);
+  /** Segments selected whole. */
+  const selectedSegKeys = (): number[] =>
+    selectedItems().filter((i) => i.wordIdx == null).map((i) => i.segKey);
+
+  const isWordSelected = (segKey: number, wordIdx: number) =>
+    isItemSelected({ segKey, wordIdx });
+  const isSegSelected = (key: number) => isItemSelected({ segKey: key, wordIdx: null });
+  /** The segment itself, or any word in it, is selected. */
+  const segHasSelection = (key: number) => selectedItems().some((i) => i.segKey === key);
+
+  /** Set the selection to `items`, focusing `focus` (default: the last item). */
+  function setItems(items: Item[], focus?: Item) {
+    setMultiSel(items.length > 1 ? items : []);
+    setSelectionRaw(focus ?? items[items.length - 1] ?? null);
   }
 
-  /** Select every segment between the current anchor and `key`, in time order
-   * (⇧-click). The anchor stays put so further ⇧-clicks pivot from it. */
-  function selectRangeTo(key: number) {
-    const anchorKey = selection()?.segKey;
-    if (anchorKey == null || anchorKey === key || !getSeg(anchorKey)) {
-      setSelection({ segKey: key, wordIdx: null });
+  /** Toggle one segment or word in and out of the selection (⌥/⌘-click). */
+  function toggleSelected(item: Item) {
+    const cur = selectedItems();
+    const has = cur.some((i) => sameItem(i, item));
+    const next = has ? cur.filter((i) => !sameItem(i, item)) : [...cur, item];
+    setAnchor(has ? null : item);
+    if (!has) return setItems(next, item);
+    // Removing the focus re-points it at whatever is left; removing anything
+    // else leaves the focus where it was.
+    const focus = selection();
+    setItems(next, focus && sameItem(focus, item) ? next[next.length - 1] : (focus ?? undefined));
+  }
+
+  /** Select everything between the pivot and `item`, in time order (⇧-click,
+   * ⇧-arrow). The pivot stays put so successive ⇧-clicks re-range from it.
+   * A range only spans items of one kind; ⇧-clicking the other kind adds to
+   * the selection instead, so a mixed selection is never clobbered. */
+  function selectRangeTo(item: Item) {
+    const pivot = anchor() ?? selection();
+    if (!pivot || sameItem(pivot, item)) {
+      setSelection(item);
+      setAnchor(item);
       return;
     }
-    const ordered = [...doc.segments].sort((a, b) => segStart(a) - segStart(b));
-    const i = ordered.findIndex((s) => s.key === anchorKey);
-    const j = ordered.findIndex((s) => s.key === key);
+    if ((pivot.wordIdx == null) !== (item.wordIdx == null)) return toggleSelected(item);
+    const flat: Item[] =
+      item.wordIdx == null ? orderedSegs().map((s) => ({ segKey: s.key, wordIdx: null })) : orderedWords();
+    const i = flat.findIndex((f) => sameItem(f, pivot));
+    const j = flat.findIndex((f) => sameItem(f, item));
     if (i < 0 || j < 0) return;
-    const [lo, hi] = i < j ? [i, j] : [j, i];
-    setMultiSel(ordered.slice(lo, hi + 1).map((s) => s.key));
-    setSelectionRaw({ segKey: anchorKey, wordIdx: null });
+    setAnchor(pivot);
+    setItems(i < j ? flat.slice(i, j + 1) : flat.slice(j, i + 1), item);
   }
   const [histVersion, setHistVersion] = createSignal(0);
 
@@ -100,8 +138,18 @@ export function createAnnotatorStore(
   const redoStack: Doc[] = [];
   const snap = (): Doc => structuredClone(unwrap(doc));
 
+  const measuredDur = createMemo(() => lastWordDuration(doc.segments));
+  const [frozenDur, setFrozenDur] = createSignal<number | null>(null);
+
+  /** The file-wide median word duration used to size every segment's final
+   * word. Held steady for the span of an op: without the latch, dragging one
+   * word would shift the median and visibly resize the trailing word of every
+   * other segment mid-gesture. */
+  const lastWordDur = () => frozenDur() ?? measuredDur();
+
   /** Push an undo snapshot. Call once before an operation (or drag) begins. */
   function beginOp() {
+    setFrozenDur(measuredDur());
     undoStack.push(snap());
     if (undoStack.length > MAX_HISTORY) undoStack.shift();
     redoStack.length = 0;
@@ -110,6 +158,7 @@ export function createAnnotatorStore(
 
   /** Commit the operation: discard the snapshot if nothing changed, else fire onChange. */
   function endOp() {
+    setFrozenDur(null);
     const top = undoStack[undoStack.length - 1];
     if (top && JSON.stringify(top) === JSON.stringify(unwrap(doc))) {
       undoStack.pop();
@@ -144,6 +193,7 @@ export function createAnnotatorStore(
       ),
     );
     setSelection(null);
+    setFrozenDur(null);
     undoStack.length = 0;
     redoStack.length = 0;
     setHistVersion((v) => v + 1);
@@ -151,6 +201,12 @@ export function createAnnotatorStore(
 
   const segIndex = (key: number) => doc.segments.findIndex((s) => s.key === key);
   const getSeg = (key: number): SegRec | undefined => doc.segments[segIndex(key)];
+
+  const orderedSegs = () => [...doc.segments].sort((a, b) => segStart(a) - segStart(b));
+
+  /** Every word in the document, in time order, as positional refs. */
+  const orderedWords = (): WordRef[] =>
+    orderedSegs().flatMap((s) => s.words.map((_, i) => ({ segKey: s.key, wordIdx: i })));
 
   // ---- move ops (no snapshot; caller wraps in beginOp/endOp for drags) ----
 
@@ -182,7 +238,7 @@ export function createAnnotatorStore(
         if (!seg.words.length) return;
         const first = seg.words[0].timestamp;
         const last = seg.words[seg.words.length - 1].timestamp;
-        const d = clamp(delta, -first, duration - LAST_WORD_DURATION - last);
+        const d = clamp(delta, -first, duration - lastWordDur() - last);
         for (const w of seg.words) w.timestamp += d;
       }),
     );
@@ -258,7 +314,7 @@ export function createAnnotatorStore(
         d.segments.push({
           key: newKey,
           speaker_id: spId,
-          words: [{ timestamp: clamp(time, 0, duration - LAST_WORD_DURATION), text: "…" }],
+          words: [{ timestamp: clamp(time, 0, duration - lastWordDur()), text: "…" }],
         });
       }),
     );
@@ -266,44 +322,44 @@ export function createAnnotatorStore(
     endOp();
   }
 
-  function deleteSegment(key: number) {
-    deleteSegments([key]);
-  }
+  const deleteSegment = (key: number) => deleteItems([{ segKey: key, wordIdx: null }]);
+  const deleteSegments = (keys: number[]) =>
+    deleteItems(keys.map((key) => ({ segKey: key, wordIdx: null })));
+  const deleteWord = (key: number, i: number) => deleteItems([{ segKey: key, wordIdx: i }]);
+  const deleteSelection = () => deleteItems(selectedItems());
 
-  function deleteSegments(keys: number[]) {
-    const set = new Set(keys);
-    if (!doc.segments.some((s) => set.has(s.key))) return;
-    beginOp();
-    setDoc(
-      produce((d) => {
-        for (let i = d.segments.length - 1; i >= 0; i--) {
-          if (set.has(d.segments[i].key)) d.segments.splice(i, 1);
-        }
-      }),
+  /** Delete any mix of whole segments and individual words as one undo step.
+   * Segments left wordless go too. */
+  function deleteItems(items: Item[]) {
+    const segKeys = new Set(items.filter((i) => i.wordIdx == null).map((i) => i.segKey));
+    // Words inside a segment that's going away wholesale need no separate work.
+    const words = new Set(
+      items.filter(isWordItem).filter((w) => !segKeys.has(w.segKey)).map(itemKey),
     );
-    setSelection(null);
-    endOp();
-  }
-
-  function deleteWord(key: number, i: number) {
-    const idx = segIndex(key);
-    if (idx < 0) return;
-    // Land on the previous word (crossing segments) so repeated Delete keeps eating backwards.
+    if (!words.size && !doc.segments.some((s) => segKeys.has(s.key))) return;
+    // Deleting words lands on the nearest word before the first one removed, so
+    // repeated ⌫ keeps eating backwards; it precedes every deletion, so its
+    // index survives the splices. Deleting whole segments just clears.
     let after: Selection = null;
-    if (i > 0) {
-      after = { segKey: key, wordIdx: i - 1 };
-    } else {
-      const ordered = [...doc.segments].sort((a, b) => segStart(a) - segStart(b));
-      const si = ordered.findIndex((s) => s.key === key);
-      const prev = ordered[si - 1];
-      if (prev?.words.length) after = { segKey: prev.key, wordIdx: prev.words.length - 1 };
+    if (!segKeys.size) {
+      const flat = orderedWords();
+      const first = flat.findIndex((w) => words.has(itemKey(w)));
+      if (first > 0) after = flat[first - 1];
     }
     beginOp();
     setDoc(
       produce((d) => {
-        const seg = d.segments[idx];
-        seg.words.splice(i, 1);
-        if (!seg.words.length) d.segments.splice(idx, 1);
+        for (const seg of d.segments) {
+          if (segKeys.has(seg.key)) continue;
+          for (let i = seg.words.length - 1; i >= 0; i--) {
+            if (words.has(itemKey({ segKey: seg.key, wordIdx: i }))) seg.words.splice(i, 1);
+          }
+        }
+        for (let i = d.segments.length - 1; i >= 0; i--) {
+          if (segKeys.has(d.segments[i].key) || !d.segments[i].words.length) {
+            d.segments.splice(i, 1);
+          }
+        }
       }),
     );
     setSelection(after);
@@ -324,7 +380,7 @@ export function createAnnotatorStore(
       produce((seg) => {
         const w = seg.words[i];
         if (!w) return;
-        const span = wordEnd(seg.words, i) - w.timestamp;
+        const span = wordEnd(seg.words, i, lastWordDur()) - w.timestamp;
         const replacements = tokens.map((t, k) => ({
           timestamp: w.timestamp + (span * k) / tokens.length,
           text: t,
@@ -360,7 +416,7 @@ export function createAnnotatorStore(
   function selectAdjacentWord(dir: 1 | -1) {
     const sel = selection();
     if (!sel) return;
-    const ordered = [...doc.segments].sort((a, b) => segStart(a) - segStart(b));
+    const ordered = orderedSegs();
     const si = ordered.findIndex((s) => s.key === sel.segKey);
     if (si < 0) return;
     const seg = ordered[si];
@@ -372,6 +428,23 @@ export function createAnnotatorStore(
     const next = ordered[si + dir];
     if (!next || !next.words.length) return;
     setSelection({ segKey: next.key, wordIdx: dir > 0 ? 0 : next.words.length - 1 });
+  }
+
+  /** Grow (or shrink) the selection by one item in time order (⇧-arrow) —
+   * over words or over segments, matching what's focused. The first extension
+   * drops the pivot at the focus, so reversing direction shrinks the range. */
+  function extendSelection(dir: 1 | -1) {
+    const focus = selection();
+    if (!focus) return;
+    const flat: Item[] =
+      focus.wordIdx == null
+        ? orderedSegs().map((s) => ({ segKey: s.key, wordIdx: null }))
+        : orderedWords();
+    const i = flat.findIndex((f) => sameItem(f, focus));
+    const next = i < 0 ? undefined : flat[i + dir];
+    if (!next) return;
+    if (!anchor()) setAnchor(focus);
+    selectRangeTo(next);
   }
 
   function requestWordEdit(segKey: number, wordIdx: number, seed: string | null) {
@@ -456,15 +529,22 @@ export function createAnnotatorStore(
     duration,
     selection,
     setSelection,
+    selectedItems,
     selectedSegKeys,
+    selectedWords,
+    isItemSelected,
     isSegSelected,
-    toggleSegSelected,
+    isWordSelected,
+    segHasSelection,
+    toggleSelected,
     selectRangeTo,
     selectAdjacentWord,
+    extendSelection,
     editRequest,
     setEditRequest,
     requestWordEdit,
     getSeg,
+    lastWordDur,
     beginOp,
     endOp,
     moveWord,
@@ -476,6 +556,8 @@ export function createAnnotatorStore(
     deleteSegment,
     deleteSegments,
     deleteWord,
+    deleteItems,
+    deleteSelection,
     commitWordText,
     joinWithPrev,
     addSpeaker,

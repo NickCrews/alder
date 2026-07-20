@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRoot } from "solid-js";
 import { createAnnotatorStore } from "../src/store";
+import { LAST_WORD_DURATION } from "../src/time";
 import type { AnnotationState } from "../src/types";
 
 function makeState(): AnnotationState {
@@ -87,26 +88,26 @@ describe("store ops", () => {
   it("toggles segments in and out of the multi-selection", () => {
     withStore((s) => {
       const [segA, segB] = s.doc.segments;
-      s.setSelection({ segKey: segA.key, wordIdx: null });
-      s.toggleSegSelected(segB.key);
+      const seg = (key: number) => ({ segKey: key, wordIdx: null });
+      s.setSelection(seg(segA.key));
+      s.toggleSelected(seg(segB.key));
       expect(s.selectedSegKeys().sort()).toEqual([segA.key, segB.key].sort());
       expect(s.isSegSelected(segA.key)).toBe(true);
-      s.toggleSegSelected(segA.key);
+      s.toggleSelected(seg(segA.key));
       expect(s.selectedSegKeys()).toEqual([segB.key]);
-      s.toggleSegSelected(segB.key);
+      s.toggleSelected(seg(segB.key));
       expect(s.selectedSegKeys()).toEqual([]);
       expect(s.selection()).toBeNull();
     });
   });
 
-  it("selects a time-ordered range from the anchor", () => {
+  it("selects a time-ordered range of segments from the pivot", () => {
     withStore((s) => {
       const [segA, segB] = s.doc.segments;
       s.splitSegment(segA.key, 1); // three segments: hello | there world | again
       s.setSelection({ segKey: segA.key, wordIdx: null });
-      s.selectRangeTo(segB.key);
+      s.selectRangeTo({ segKey: segB.key, wordIdx: null });
       expect(s.selectedSegKeys().length).toBe(3);
-      expect(s.selection()!.segKey).toBe(segA.key); // anchor stays put
     });
   });
 
@@ -114,9 +115,104 @@ describe("store ops", () => {
     withStore((s) => {
       const [segA, segB] = s.doc.segments;
       s.setSelection({ segKey: segA.key, wordIdx: null });
-      s.toggleSegSelected(segB.key);
+      s.toggleSelected({ segKey: segB.key, wordIdx: null });
       s.setSelection({ segKey: segA.key, wordIdx: 0 });
-      expect(s.selectedSegKeys()).toEqual([segA.key]);
+      expect(s.selectedItems()).toEqual([{ segKey: segA.key, wordIdx: 0 }]);
+      expect(s.selectedSegKeys()).toEqual([]);
+    });
+  });
+
+  it("extends the word selection from a pivot, and shrinks it back", () => {
+    withStore((s) => {
+      const segA = s.doc.segments[0];
+      s.setSelection({ segKey: segA.key, wordIdx: 0 });
+      expect(s.selectedWords().length).toBe(1);
+      s.extendSelection(1);
+      s.extendSelection(1);
+      expect(s.selectedWords().map((w) => w.wordIdx)).toEqual([0, 1, 2]);
+      expect(s.isWordSelected(segA.key, 1)).toBe(true);
+      s.extendSelection(-1); // reverse: the pivot holds, the focus retreats
+      expect(s.selectedWords().map((w) => w.wordIdx)).toEqual([0, 1]);
+    });
+  });
+
+  it("extends the word selection across a segment boundary", () => {
+    withStore((s) => {
+      const [segA, segB] = s.doc.segments;
+      s.setSelection({ segKey: segA.key, wordIdx: 2 });
+      s.extendSelection(1);
+      expect(s.selectedWords()).toEqual([
+        { segKey: segA.key, wordIdx: 2 },
+        { segKey: segB.key, wordIdx: 0 },
+      ]);
+    });
+  });
+
+  it("deletes a word range as one undo step, dropping emptied segments", () => {
+    withStore((s) => {
+      const segA = s.doc.segments[0];
+      s.setSelection({ segKey: segA.key, wordIdx: 1 });
+      s.extendSelection(1);
+      s.extendSelection(1); // there, world, again — empties segB
+      s.deleteSelection();
+      expect(s.doc.segments.length).toBe(1);
+      expect(s.doc.segments[0].words.map((w) => w.text)).toEqual(["hello"]);
+      expect(s.selection()).toEqual({ segKey: segA.key, wordIdx: 0 }); // word before the range
+      s.undo();
+      expect(s.doc.segments.length).toBe(2);
+      expect(s.doc.segments[0].words.length).toBe(3);
+    });
+  });
+
+  it("collapses the word range on a plain selection", () => {
+    withStore((s) => {
+      const segA = s.doc.segments[0];
+      s.setSelection({ segKey: segA.key, wordIdx: 0 });
+      s.extendSelection(1);
+      s.setSelection({ segKey: segA.key, wordIdx: 2 });
+      expect(s.selectedWords()).toEqual([{ segKey: segA.key, wordIdx: 2 }]);
+    });
+  });
+
+  it("mixes words and whole segments in one selection", () => {
+    withStore((s) => {
+      const [segA, segB] = s.doc.segments;
+      s.setSelection({ segKey: segA.key, wordIdx: 1 }); // the word "there"
+      s.toggleSelected({ segKey: segB.key, wordIdx: null }); // plus all of segB
+      expect(s.selectedWords()).toEqual([{ segKey: segA.key, wordIdx: 1 }]);
+      expect(s.selectedSegKeys()).toEqual([segB.key]);
+      // segA holds a selected word but isn't itself selected — ⌫ spares the rest of it
+      expect(s.isSegSelected(segA.key)).toBe(false);
+      expect(s.segHasSelection(segA.key)).toBe(true);
+
+      s.deleteSelection();
+      expect(s.doc.segments.length).toBe(1);
+      expect(s.doc.segments[0].words.map((w) => w.text)).toEqual(["hello", "world"]);
+      s.undo();
+      expect(s.doc.segments.length).toBe(2);
+    });
+  });
+
+  it("⇧-clicking the other kind adds to the selection instead of ranging", () => {
+    withStore((s) => {
+      const [segA, segB] = s.doc.segments;
+      s.setSelection({ segKey: segA.key, wordIdx: 0 });
+      s.selectRangeTo({ segKey: segB.key, wordIdx: null });
+      expect(s.selectedItems()).toEqual([
+        { segKey: segA.key, wordIdx: 0 },
+        { segKey: segB.key, wordIdx: null },
+      ]);
+    });
+  });
+
+  it("deleting a selected word inside a selected segment doesn't double up", () => {
+    withStore((s) => {
+      const [segA] = s.doc.segments;
+      s.setSelection({ segKey: segA.key, wordIdx: 0 });
+      s.toggleSelected({ segKey: segA.key, wordIdx: null });
+      s.deleteSelection();
+      expect(s.doc.segments.length).toBe(1); // segA gone whole, segB untouched
+      expect(s.doc.segments[0].words.map((w) => w.text)).toEqual(["again"]);
     });
   });
 
@@ -256,6 +352,60 @@ describe("store ops", () => {
       expect(s.editRequest()).toEqual({ segKey: key, wordIdx: 1, seed: "x" });
       s.setEditRequest(null); // consumer (WordChip) clears it
       expect(s.editRequest()).toBeNull();
+    });
+  });
+
+  describe("lastWordDur", () => {
+    it("is the median gap pooled across every segment", () => {
+      withStore((s) => {
+        // gaps: 0.5, 0.5 from the first segment; the second is one word
+        expect(s.lastWordDur()).toBe(0.5);
+      });
+    });
+
+    it("falls back to the constant for an empty document", () => {
+      createRoot((dispose) => {
+        const s = createAnnotatorStore({ ...makeState(), segments: [] });
+        expect(s.lastWordDur()).toBe(LAST_WORD_DURATION);
+        dispose();
+      });
+    });
+
+    it("grows from the fallback once the document has a pair to measure", () => {
+      createRoot((dispose) => {
+        const s = createAnnotatorStore({ ...makeState(), segments: [] });
+        s.createSegment(1.0);
+        expect(s.lastWordDur()).toBe(LAST_WORD_DURATION); // one lone word, nothing to measure
+        s.setState({
+          ...makeState(),
+          segments: [
+            {
+              speaker_id: 0,
+              words: [
+                { timestamp: 0, text: "a" },
+                { timestamp: 3, text: "b" },
+              ],
+            },
+          ],
+        });
+        expect(s.lastWordDur()).toBe(3);
+        dispose();
+      });
+    });
+
+    it("holds steady for the span of an op so drags don't resize other segments", () => {
+      withStore((s) => {
+        const key = s.doc.segments[0].key;
+        expect(s.lastWordDur()).toBe(0.5);
+        s.beginOp();
+        // Drag the last word from 2.0 out to 3.0. Gaps become 0.5 and 1.5, so
+        // the measured median moves to 1.0 — but the latched value must stay
+        // put until the gesture commits.
+        s.moveWord(key, 2, 3.0);
+        expect(s.lastWordDur()).toBe(0.5);
+        s.endOp();
+        expect(s.lastWordDur()).toBe(1.0);
+      });
     });
   });
 

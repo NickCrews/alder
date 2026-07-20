@@ -11,6 +11,7 @@ export interface LaneAssignment {
  * lane whose previous occupant has already ended. */
 export function assignLanes(
   segments: readonly { key: number; words: Word[] }[],
+  lastDur: number,
 ): LaneAssignment {
   const order = [...segments].sort((a, b) => segStart(a) - segStart(b));
   const laneEnds: number[] = [];
@@ -20,9 +21,9 @@ export function assignLanes(
     let li = laneEnds.findIndex((end) => end <= start + 1e-6);
     if (li === -1) {
       li = laneEnds.length;
-      laneEnds.push(segEnd(s));
+      laneEnds.push(segEnd(s, lastDur));
     } else {
-      laneEnds[li] = segEnd(s);
+      laneEnds[li] = segEnd(s, lastDur);
     }
     lane.set(s.key, li);
   }

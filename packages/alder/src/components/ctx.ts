@@ -9,12 +9,21 @@ export interface Viewport {
   dur: number;
 }
 
+/** The span of an in-progress drag, drawn as full-height rules over the timeline. */
+export interface Guide {
+  start: number;
+  end: number;
+}
+
 /** Shared plumbing threaded through the annotator UI. */
 export interface Ctx {
   store: AnnotatorStore;
   player: Player;
   view: Accessor<Viewport>;
   setView: (v: Viewport) => void;
+  /** Set while dragging so the edges can be lined up against the waveform. */
+  guide: Accessor<Guide | null>;
+  setGuide: (g: Guide | null) => void;
   width: Accessor<number>;
   duration: number;
   /** time (s) -> px within the timeline area */

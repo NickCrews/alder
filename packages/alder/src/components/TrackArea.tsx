@@ -19,11 +19,14 @@ const TRACK_PAD = 20;
 function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
   const { store } = props.ctx;
   const start = () => segStart(props.seg);
-  const end = () => segEnd(props.seg);
+  const end = () => segEnd(props.seg, props.ctx.store.lastWordDur());
   const left = () => props.ctx.x(start());
   const width = () => Math.max(props.ctx.x(end()) - left(), 10);
   const color = () => speakerColor(store.doc.speakers, props.seg.speaker_id);
+  /** The whole segment is selected — ⌫ takes it and its words with it. */
   const selected = () => store.isSegSelected(props.seg.key);
+  /** …or it merely holds a selected word, which only earns it a raise. */
+  const active = () => store.segHasSelection(props.seg.key);
   const visible = () => {
     const v = props.ctx.view();
     return end() >= v.start && start() <= v.start + v.dur;
@@ -37,7 +40,7 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
   function onContextMenu(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (!store.isSegSelected(props.seg.key)) {
+    if (!store.segHasSelection(props.seg.key)) {
       store.setSelection({ segKey: props.seg.key, wordIdx: null });
     }
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -66,8 +69,9 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
     e.stopPropagation();
     if (e.button !== 0) return;
     if (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) {
-      if (e.shiftKey) store.selectRangeTo(props.seg.key);
-      else store.toggleSegSelected(props.seg.key);
+      const item = { segKey: props.seg.key, wordIdx: null };
+      if (e.shiftKey) store.selectRangeTo(item);
+      else store.toggleSelected(item);
       return;
     }
     let applied = 0;
@@ -92,7 +96,7 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
     <Show when={visible()}>
       <div
         class="absolute rounded border hover:z-20"
-        classList={{ "z-10": selected() }}
+        classList={{ "z-10": active() }}
         onContextMenu={onContextMenu}
         style={{
           left: `${left()}px`,
@@ -194,7 +198,7 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
 
 export function TrackArea(props: { ctx: Ctx }) {
   const { store } = props.ctx;
-  const lanes = createMemo(() => assignLanes(store.doc.segments));
+  const lanes = createMemo(() => assignLanes(store.doc.segments, store.lastWordDur()));
   const height = () => lanes().count * LANE_HEIGHT + TRACK_PAD;
 
   function onDblClick(e: MouseEvent) {
