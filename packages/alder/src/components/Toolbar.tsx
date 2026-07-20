@@ -1,4 +1,4 @@
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import type { Ctx } from "./ctx";
 import { formatTime } from "../time";
 
@@ -37,6 +37,19 @@ export function Toolbar(props: { ctx: Ctx }) {
       >
         <For each={SPEEDS}>{(s) => <option value={String(s)}>{s}×</option>}</For>
       </select>
+      <Show when={store.selectedSegKeys().length > 1}>
+        <span class="mx-1 h-4 w-px bg-zinc-700" />
+        <span class="text-xs text-zinc-400">
+          {store.selectedSegKeys().length} segments selected
+        </span>
+        <button
+          class="rounded border border-sky-700 bg-sky-900/60 px-2 py-0.5 text-xs text-sky-200 hover:bg-sky-800/60"
+          title="Merge the selected segments into one (earliest segment's speaker wins)"
+          onClick={() => store.mergeSegments(store.selectedSegKeys())}
+        >
+          Merge {store.selectedSegKeys().length}
+        </button>
+      </Show>
       <span class="flex-1" />
       <button class={btn} disabled={!store.canUndo()} onClick={() => store.undo()} title="Undo (⌘Z)">
         ↺ undo

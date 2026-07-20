@@ -64,8 +64,68 @@ describe("store ops", () => {
       s.splitSegment(key, 1);
       expect(s.doc.segments.length).toBe(3);
       expect(s.getSeg(key)!.words.map((w) => w.text)).toEqual(["hello"]);
-      s.mergeWithNext(key);
+      const tailKey = s.selection()!.segKey;
+      s.mergeSegments([key, tailKey]);
+      expect(s.doc.segments.length).toBe(2);
       expect(s.getSeg(key)!.words.map((w) => w.text)).toEqual(["hello", "there", "world"]);
+    });
+  });
+
+  it("merges into the earliest segment, keeping its speaker", () => {
+    withStore((s) => {
+      const [segA, segB] = s.doc.segments;
+      s.setSegmentSpeaker(segB.key, 1);
+      s.mergeSegments([segB.key, segA.key]);
+      expect(s.doc.segments.length).toBe(1);
+      const merged = s.getSeg(segA.key)!;
+      expect(merged.speaker_id).toBe(0);
+      expect(merged.words.map((w) => w.text)).toEqual(["hello", "there", "world", "again"]);
+      expect(s.selection()).toEqual({ segKey: segA.key, wordIdx: null });
+    });
+  });
+
+  it("toggles segments in and out of the multi-selection", () => {
+    withStore((s) => {
+      const [segA, segB] = s.doc.segments;
+      s.setSelection({ segKey: segA.key, wordIdx: null });
+      s.toggleSegSelected(segB.key);
+      expect(s.selectedSegKeys().sort()).toEqual([segA.key, segB.key].sort());
+      expect(s.isSegSelected(segA.key)).toBe(true);
+      s.toggleSegSelected(segA.key);
+      expect(s.selectedSegKeys()).toEqual([segB.key]);
+      s.toggleSegSelected(segB.key);
+      expect(s.selectedSegKeys()).toEqual([]);
+      expect(s.selection()).toBeNull();
+    });
+  });
+
+  it("selects a time-ordered range from the anchor", () => {
+    withStore((s) => {
+      const [segA, segB] = s.doc.segments;
+      s.splitSegment(segA.key, 1); // three segments: hello | there world | again
+      s.setSelection({ segKey: segA.key, wordIdx: null });
+      s.selectRangeTo(segB.key);
+      expect(s.selectedSegKeys().length).toBe(3);
+      expect(s.selection()!.segKey).toBe(segA.key); // anchor stays put
+    });
+  });
+
+  it("single selection collapses the multi-selection", () => {
+    withStore((s) => {
+      const [segA, segB] = s.doc.segments;
+      s.setSelection({ segKey: segA.key, wordIdx: null });
+      s.toggleSegSelected(segB.key);
+      s.setSelection({ segKey: segA.key, wordIdx: 0 });
+      expect(s.selectedSegKeys()).toEqual([segA.key]);
+    });
+  });
+
+  it("deletes several segments at once", () => {
+    withStore((s) => {
+      s.deleteSegments(s.doc.segments.map((seg) => seg.key));
+      expect(s.doc.segments.length).toBe(0);
+      s.undo();
+      expect(s.doc.segments.length).toBe(2);
     });
   });
 

@@ -18,7 +18,7 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
   const left = () => props.ctx.x(start());
   const width = () => Math.max(props.ctx.x(end()) - left(), 10);
   const color = () => speakerColor(store.doc.speakers, props.seg.speaker_id);
-  const selected = () => store.selection()?.segKey === props.seg.key;
+  const selected = () => store.isSegSelected(props.seg.key);
   const visible = () => {
     const v = props.ctx.view();
     return end() >= v.start && start() <= v.start + v.dur;
@@ -26,6 +26,12 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
 
   function onPointerDown(e: PointerEvent) {
     e.stopPropagation();
+    if (e.button !== 0) return;
+    if (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) {
+      if (e.shiftKey) store.selectRangeTo(props.seg.key);
+      else store.toggleSegSelected(props.seg.key);
+      return;
+    }
     let applied = 0;
     startDrag(e, {
       onStart: () => {
@@ -63,13 +69,30 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
           class="flex cursor-grab touch-none items-center px-1 select-none active:cursor-grabbing"
           style={{ height: `${LABEL_HEIGHT}px` }}
           onPointerDown={onPointerDown}
-          title="Drag to move segment in time; click to select"
+          title="Drag to move segment in time; click to select; ⇧-click to select a range, ⌥-click to toggle"
         >
           <SpeakerSelect
             ctx={props.ctx}
             segKey={props.seg.key}
             speakerId={props.seg.speaker_id}
           />
+          <button
+            class="ml-auto shrink-0 cursor-pointer rounded p-0.5 text-zinc-500 hover:bg-zinc-700/60 hover:text-red-400"
+            title="Delete segment"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => store.deleteSegment(props.seg.key)}
+          >
+            <svg
+              class="h-2.5 w-2.5"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+            >
+              <path d="M1.5 3h9M4.5 3V1.5h3V3M2.5 3l.5 7.5h6l.5-7.5M4.75 5v3.5M7.25 5v3.5" />
+            </svg>
+          </button>
         </div>
         <div class="relative" style={{ height: `${LANE_HEIGHT - 8 - LABEL_HEIGHT}px` }}>
           <Index each={props.seg.words}>

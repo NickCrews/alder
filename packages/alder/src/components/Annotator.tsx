@@ -99,11 +99,13 @@ export function Annotator(props: AnnotatorProps) {
       e.preventDefault();
       e.shiftKey ? store.redo() : store.undo();
     } else if (e.key === "Delete" || e.key === "Backspace") {
+      const keys = store.selectedSegKeys();
       const sel = store.selection();
-      if (!sel) return;
+      if (!keys.length) return;
       e.preventDefault();
-      if (sel.wordIdx != null) store.deleteWord(sel.segKey, sel.wordIdx);
-      else store.deleteSegment(sel.segKey);
+      if (keys.length > 1) store.deleteSegments(keys);
+      else if (sel?.wordIdx != null) store.deleteWord(sel.segKey, sel.wordIdx);
+      else store.deleteSegments(keys);
     } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       if (!store.selection()) return;
       e.preventDefault();

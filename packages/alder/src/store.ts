@@ -45,8 +45,55 @@ export function createAnnotatorStore(
     speakers: initial.speakers.map((s) => ({ ...s })),
     segments: initial.segments.map(toRec),
   });
-  const [selection, setSelection] = createSignal<Selection>(null);
+  const [selection, setSelectionRaw] = createSignal<Selection>(null);
+  const [multiSel, setMultiSel] = createSignal<number[]>([]);
   const [editRequest, setEditRequest] = createSignal<EditRequest>(null);
+
+  /** Select a single segment/word (or nothing), collapsing any multi-selection. */
+  function setSelection(sel: Selection) {
+    setMultiSel([]);
+    setSelectionRaw(sel);
+  }
+
+  /** Keys of all selected segments: the multi-selection if active, else the
+   * single selection's segment. */
+  function selectedSegKeys(): number[] {
+    const m = multiSel();
+    if (m.length) return m;
+    const s = selection();
+    return s ? [s.segKey] : [];
+  }
+
+  const isSegSelected = (key: number) => selectedSegKeys().includes(key);
+
+  /** Toggle a segment's membership in the multi-selection (⌥/⌘-click). */
+  function toggleSegSelected(key: number) {
+    const cur = selectedSegKeys();
+    const next = cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key];
+    setMultiSel(next);
+    if (!cur.includes(key)) {
+      setSelectionRaw({ segKey: key, wordIdx: null });
+    } else if (selection()?.segKey === key) {
+      setSelectionRaw(next.length ? { segKey: next[next.length - 1], wordIdx: null } : null);
+    }
+  }
+
+  /** Select every segment between the current anchor and `key`, in time order
+   * (⇧-click). The anchor stays put so further ⇧-clicks pivot from it. */
+  function selectRangeTo(key: number) {
+    const anchorKey = selection()?.segKey;
+    if (anchorKey == null || anchorKey === key || !getSeg(anchorKey)) {
+      setSelection({ segKey: key, wordIdx: null });
+      return;
+    }
+    const ordered = [...doc.segments].sort((a, b) => segStart(a) - segStart(b));
+    const i = ordered.findIndex((s) => s.key === anchorKey);
+    const j = ordered.findIndex((s) => s.key === key);
+    if (i < 0 || j < 0) return;
+    const [lo, hi] = i < j ? [i, j] : [j, i];
+    setMultiSel(ordered.slice(lo, hi + 1).map((s) => s.key));
+    setSelectionRaw({ segKey: anchorKey, wordIdx: null });
+  }
   const [histVersion, setHistVersion] = createSignal(0);
 
   const undoStack: Doc[] = [];
@@ -171,30 +218,29 @@ export function createAnnotatorStore(
     endOp();
   }
 
-  /** Merge with the next segment (in time) that has the same speaker. */
-  function mergeWithNext(key: number) {
-    const seg = getSeg(key);
-    if (!seg) return;
-    const myStart = segStart(seg);
-    let best: SegRec | null = null;
-    for (const other of doc.segments) {
-      if (other.key === key || other.speaker_id !== seg.speaker_id) continue;
-      if (segStart(other) < myStart) continue;
-      if (!best || segStart(other) < segStart(best)) best = other;
-    }
-    if (!best) return;
-    const bestKey = best.key;
+  /** Merge the given segments into one, keeping the earliest segment's
+   * key and speaker; words are interleaved in time order. */
+  function mergeSegments(keys: number[]) {
+    const set = new Set(keys);
+    const segs = doc.segments.filter((s) => set.has(s.key));
+    if (segs.length < 2) return;
+    const targetKey = segs.reduce((a, b) => (segStart(b) < segStart(a) ? b : a)).key;
     beginOp();
     setDoc(
       produce((d) => {
-        const a = d.segments.find((s) => s.key === key)!;
-        const bIdx = d.segments.findIndex((s) => s.key === bestKey);
-        const b = d.segments[bIdx];
-        a.words = [...a.words, ...b.words].sort((x, y) => x.timestamp - y.timestamp);
-        d.segments.splice(bIdx, 1);
+        const words = d.segments
+          .filter((s) => set.has(s.key))
+          .flatMap((s) => s.words)
+          .sort((x, y) => x.timestamp - y.timestamp);
+        const target = d.segments.find((s) => s.key === targetKey)!;
+        target.words = words;
+        for (let i = d.segments.length - 1; i >= 0; i--) {
+          const s = d.segments[i];
+          if (set.has(s.key) && s.key !== targetKey) d.segments.splice(i, 1);
+        }
       }),
     );
-    setSelection({ segKey: key, wordIdx: null });
+    setSelection({ segKey: targetKey, wordIdx: null });
     endOp();
   }
 
@@ -221,10 +267,20 @@ export function createAnnotatorStore(
   }
 
   function deleteSegment(key: number) {
-    const idx = segIndex(key);
-    if (idx < 0) return;
+    deleteSegments([key]);
+  }
+
+  function deleteSegments(keys: number[]) {
+    const set = new Set(keys);
+    if (!doc.segments.some((s) => set.has(s.key))) return;
     beginOp();
-    setDoc(produce((d) => void d.segments.splice(idx, 1)));
+    setDoc(
+      produce((d) => {
+        for (let i = d.segments.length - 1; i >= 0; i--) {
+          if (set.has(d.segments[i].key)) d.segments.splice(i, 1);
+        }
+      }),
+    );
     setSelection(null);
     endOp();
   }
@@ -390,6 +446,10 @@ export function createAnnotatorStore(
     duration,
     selection,
     setSelection,
+    selectedSegKeys,
+    isSegSelected,
+    toggleSegSelected,
+    selectRangeTo,
     selectAdjacentWord,
     editRequest,
     setEditRequest,
@@ -401,9 +461,10 @@ export function createAnnotatorStore(
     moveSegment,
     setSegmentSpeaker,
     splitSegment,
-    mergeWithNext,
+    mergeSegments,
     createSegment,
     deleteSegment,
+    deleteSegments,
     deleteWord,
     commitWordText,
     joinWithPrev,
