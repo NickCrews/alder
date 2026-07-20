@@ -102,16 +102,17 @@ export function WordChip(props: {
       class="absolute inset-y-0.5 flex cursor-grab touch-none items-center rounded-sm border text-xs text-zinc-100 active:cursor-grabbing"
       classList={{
         "ring-1 ring-white": selected(),
-        "z-10": expanded() || hoverLabel(),
-        "shadow-md shadow-black/50": expanded(),
+        "z-10": expanded() || hoverLabel() || !!editing(),
+        "shadow-md shadow-black/50": expanded() || !!editing(),
       }}
       style={{
         left: `${left()}px`,
         width: editing() ? "auto" : expanded() ? "max-content" : `${width()}px`,
         "min-width": expanded() ? `${width()}px` : undefined,
-        "background-color": expanded()
-          ? `color-mix(in srgb, ${props.color} 35%, #18181b)`
-          : props.color + "55",
+        "background-color":
+          expanded() || editing()
+            ? `color-mix(in srgb, ${props.color} 35%, #18181b)`
+            : props.color + "55",
         "border-color": props.color + "88",
       }}
       title={`${word().text} @ ${word().timestamp.toFixed(2)}s`}
