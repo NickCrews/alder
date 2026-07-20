@@ -1,5 +1,8 @@
+import { For } from "solid-js";
 import type { Ctx } from "./ctx";
 import { formatTime } from "../time";
+
+const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 const btn =
   "rounded border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40";
@@ -26,6 +29,14 @@ export function Toolbar(props: { ctx: Ctx }) {
       <span class="font-mono text-xs text-zinc-400">
         {formatTime(player.time())} / {formatTime(player.duration)}
       </span>
+      <select
+        class={`${btn} font-mono`}
+        value={String(player.rate())}
+        onChange={(e) => player.setRate(Number(e.currentTarget.value))}
+        title="Playback speed"
+      >
+        <For each={SPEEDS}>{(s) => <option value={String(s)}>{s}×</option>}</For>
+      </select>
       <span class="flex-1" />
       <button class={btn} disabled={!store.canUndo()} onClick={() => store.undo()} title="Undo (⌘Z)">
         ↺ undo

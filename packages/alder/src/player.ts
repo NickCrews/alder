@@ -7,6 +7,7 @@ export function createPlayer(audio: Float32Array, sampleRate: number) {
   const duration = audio.length / sampleRate;
   const [playing, setPlaying] = createSignal(false);
   const [time, setTime] = createSignal(0);
+  const [rate, setRateSignal] = createSignal(1);
 
   let ctx: AudioContext | null = null;
   let buffer: AudioBuffer | null = null;
@@ -27,7 +28,8 @@ export function createPlayer(audio: Float32Array, sampleRate: number) {
   }
 
   function currentTime(): number {
-    if (playing() && ctx) return clamp(startOffset + (ctx.currentTime - startedAtCtxTime), 0, duration);
+    if (playing() && ctx)
+      return clamp(startOffset + (ctx.currentTime - startedAtCtxTime) * rate(), 0, duration);
     return time();
   }
 
@@ -57,6 +59,7 @@ export function createPlayer(audio: Float32Array, sampleRate: number) {
     const from = time() >= duration - 0.01 ? 0 : time();
     src = c.createBufferSource();
     src.buffer = buffer!;
+    src.playbackRate.value = rate();
     src.connect(c.destination);
     src.onended = () => {
       setTime(duration);
@@ -94,6 +97,19 @@ export function createPlayer(audio: Float32Array, sampleRate: number) {
     }
   }
 
+  function setRate(r: number) {
+    const target = clamp(r, 0.25, 4);
+    if (target === rate()) return;
+    if (playing() && ctx && src) {
+      // Re-anchor the elapsed-time bookkeeping so currentTime() stays
+      // continuous across the rate change.
+      startOffset = currentTime();
+      startedAtCtxTime = ctx.currentTime;
+      src.playbackRate.value = target;
+    }
+    setRateSignal(target);
+  }
+
   function destroy() {
     stopSource();
     setPlaying(false);
@@ -101,7 +117,7 @@ export function createPlayer(audio: Float32Array, sampleRate: number) {
     ctx = null;
   }
 
-  return { playing, time, duration, play, pause, toggle, seek, destroy };
+  return { playing, time, duration, rate, setRate, play, pause, toggle, seek, destroy };
 }
 
 export type Player = ReturnType<typeof createPlayer>;
