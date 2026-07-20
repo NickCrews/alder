@@ -1,4 +1,5 @@
-import { For, Index, Show, createMemo } from "solid-js";
+import { For, Index, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { Portal } from "solid-js/web";
 import type { Ctx } from "./ctx";
 import type { SegRec } from "../store";
 import { assignLanes } from "../lanes";
@@ -23,6 +24,39 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
     const v = props.ctx.view();
     return end() >= v.start && start() <= v.start + v.dur;
   };
+
+  const [menu, setMenu] = createSignal<{ x: number; y: number; splitIdx: number | null } | null>(
+    null,
+  );
+
+  /** Right-click anywhere on the segment: offer to split at the clicked time. */
+  function onContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!store.isSegSelected(props.seg.key)) {
+      store.setSelection({ segKey: props.seg.key, wordIdx: null });
+    }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const t = start() + (e.clientX - rect.left) / props.ctx.scale();
+    const i = props.seg.words.findIndex((w) => w.timestamp > t);
+    setMenu({
+      x: Math.min(e.clientX, Math.max(0, window.innerWidth - 160)),
+      y: e.clientY + 2,
+      splitIdx: i >= 1 ? i : null,
+    });
+  }
+
+  createEffect(() => {
+    if (!menu()) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setMenu(null);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    onCleanup(() => document.removeEventListener("keydown", onKeyDown, true));
+  });
 
   function onPointerDown(e: PointerEvent) {
     e.stopPropagation();
@@ -55,6 +89,7 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
       <div
         class="absolute overflow-hidden rounded border"
         classList={{ "z-10": selected() }}
+        onContextMenu={onContextMenu}
         style={{
           left: `${left()}px`,
           width: `${width()}px`,
@@ -108,6 +143,44 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
           </Index>
         </div>
       </div>
+      <Show when={menu()}>
+        {(m) => (
+          <Portal>
+            <div
+              class="fixed inset-0 z-40"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                setMenu(null);
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setMenu(null);
+              }}
+            />
+            <div
+              class="alder-root fixed z-50 min-w-32 rounded-md border border-zinc-700 bg-zinc-800 py-1 font-sans text-xs text-zinc-100 shadow-xl shadow-black/40"
+              style={{ left: `${m().x}px`, top: `${m().y}px` }}
+            >
+              <button
+                class="flex w-full cursor-pointer items-center gap-2 px-2 py-1 text-left hover:bg-zinc-700 disabled:cursor-default disabled:text-zinc-500 disabled:hover:bg-transparent"
+                disabled={m().splitIdx == null}
+                title={
+                  m().splitIdx == null
+                    ? "Nothing to split off here — click between two words"
+                    : "Split the segment at this point"
+                }
+                onClick={() => {
+                  const i = m().splitIdx;
+                  setMenu(null);
+                  if (i != null) store.splitSegment(props.seg.key, i);
+                }}
+              >
+                Split here
+              </button>
+            </div>
+          </Portal>
+        )}
+      </Show>
     </Show>
   );
 }
