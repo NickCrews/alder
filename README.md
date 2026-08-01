@@ -151,40 +151,6 @@ const [source] = createResource(() => urlSource("/audio.wav"));
 </Show>;
 ```
 
-`audioSource` is required — audio never enters through `initialState` — and it
-must be a resolved `AudioSource`, so `await` the factory (or gate on a
-`createResource`, as above) before mounting. For samples already in memory use
-`await bufferSource(samples, sampleRate)`, or decode WAV/raw f32 bytes with
-`await bufferSourceFromBytes(bytes)`. The source is caller-owned: the annotator
-never destroys one you passed in.
-
-### Streaming from a static host
-
-`bufferSource` holds every sample in memory, which is fine for clips but not for
-a three-hour meeting (~1.3 GB once the `AudioBuffer` copy is counted).
-`urlSource(url)` streams instead, and the only thing it asks of the server is
-`Range` support — so it works directly against an object store, S3, a CDN, or
-GitHub Pages, with no peaks endpoint and no metadata to precompute:
-
-```ts
-import { urlSource } from "@nickcrews/alder";
-
-const source = await urlSource("https://static.example.com/meeting.wav");
-// <Annotator initialState={{ speakers, segments }} audioSource={source} />
-```
-
-One small range request reads the WAV header for duration and sample rate. The
-zoomed-out waveform is approximated by striding a few hundred more small reads
-across the file and refined to exact samples as you zoom into a span narrow
-enough to fetch whole; playback is an `<audio>` element on the same URL, so the
-browser range-requests only what it plays. The promise settles once the header
-is parsed — the overview streams in afterward and redraws. Small files, hosts
-that ignore `Range`, and non-WAV bytes fall back to one whole-file download.
-
-> Only WAV streams (its byte layout maps directly to sample offsets). For a
-> compressed source, transcode to WAV or hand decoded samples to
-> `bufferSource`.
-
 Framework-free (this is the surface a future anywidget bridge builds on —
 styles are injected automatically, ESM, no module-scope DOM access):
 
