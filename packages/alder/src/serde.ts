@@ -1,4 +1,4 @@
-import type { AnnotationJSON, AnnotationState, Segment, Speaker } from "./types";
+import type { AnnotationState, Segment, Speaker } from "./types";
 
 export function bytesToBase64(bytes: Uint8Array): string {
   let bin = "";
@@ -105,27 +105,17 @@ function cloneSegments(segments: Segment[]): Segment[] {
   }));
 }
 
-export function parseAnnotation(input: string | AnnotationJSON): AnnotationState {
-  const json: AnnotationJSON = typeof input === "string" ? JSON.parse(input) : input;
-  if (typeof json.audio !== "string") throw new Error("Missing base64 audio field");
-  const { audio, sampleRate } = decodeAudioBytes(base64ToBytes(json.audio), json.sample_rate);
+export function parseAnnotation(input: string | AnnotationState): AnnotationState {
+  const json: AnnotationState = typeof input === "string" ? JSON.parse(input) : input;
   const speakers: Speaker[] = (json.speakers ?? []).map((s) => ({
     id: s.id,
     label: String(s.label),
   }));
-  return { audio, sampleRate, speakers, segments: cloneSegments(json.segments ?? []) };
+  return { speakers, segments: cloneSegments(json.segments ?? []) };
 }
 
-export function serializeAnnotation(state: AnnotationState): AnnotationJSON {
-  const bytes = new Uint8Array(
-    state.audio.buffer.slice(
-      state.audio.byteOffset,
-      state.audio.byteOffset + state.audio.byteLength,
-    ),
-  );
+export function serializeAnnotation(state: AnnotationState): AnnotationState {
   return {
-    sample_rate: state.sampleRate,
-    audio: bytesToBase64(bytes),
     speakers: state.speakers.map((s) => ({ id: s.id, label: s.label })),
     segments: cloneSegments(state.segments),
   };

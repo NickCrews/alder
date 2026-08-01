@@ -1,47 +1,74 @@
-import { Show, createSignal } from "solid-js";
+import { Show, createSignal, onCleanup } from "solid-js";
 import {
   Annotator,
-  decodeAudioBytes,
+  base64ToBytes,
+  bufferSourceFromBytes,
   parseAnnotation,
   serializeAnnotationString,
   type AnnotationState,
+  type AudioSource,
 } from "@nickcrews/alder";
 import { makeDemo } from "./demo";
 
 const btn =
   "rounded border border-zinc-700 bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40";
 
+/** Audio and transcript are separate resources now: the annotator edits the
+ * `state` and reads samples from the `source`. We pair them here for the life
+ * of one loaded clip. */
+interface Loaded {
+  state: AnnotationState;
+  source: AudioSource;
+}
+
 export function App() {
-  const [state, setState] = createSignal<AnnotationState | null>(null);
+  const [loaded, setLoaded] = createSignal<Loaded | null>(null);
   const [name, setName] = createSignal("annotation");
   const [error, setError] = createSignal<string | null>(null);
   // Latest committed annotation (updated by onChange); what Save writes.
   let latest: AnnotationState | null = null;
 
-  function load(s: AnnotationState, fileName?: string) {
+  function load(next: Loaded, fileName?: string) {
     setError(null);
-    latest = s;
+    latest = next.state;
     if (fileName) setName(fileName.replace(/\.(json|wav)$/i, ""));
-    setState(s);
+    // We own the source: release the one we're replacing.
+    const prev = loaded();
+    setLoaded(next);
+    prev?.source.destroy();
   }
+
+  onCleanup(() => loaded()?.source.destroy());
 
   async function openFile(file: File) {
     try {
       if (/\.json$/i.test(file.name)) {
-        load(parseAnnotation(await file.text()), file.name);
+        const raw = JSON.parse(await file.text());
+        const state = parseAnnotation(raw);
+        if (typeof raw.audio !== "string") {
+          throw new Error("This JSON has no embedded audio — import a WAV to pair with it.");
+        }
+        const source = await bufferSourceFromBytes(base64ToBytes(raw.audio), raw.sample_rate);
+        load({ state, source }, file.name);
       } else {
         const bytes = new Uint8Array(await file.arrayBuffer());
-        const { audio, sampleRate } = decodeAudioBytes(bytes);
+        const source = await bufferSourceFromBytes(bytes);
         load(
           {
-            audio,
-            sampleRate,
-            speakers: [{ id: 0, label: "Speaker 1" }],
-            segments: [],
+            state: { speakers: [{ id: 0, label: "Speaker 1" }], segments: [] },
+            source,
           },
           file.name,
         );
       }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function loadDemo() {
+    try {
+      load(await makeDemo(), "en-16k");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -85,11 +112,11 @@ export function App() {
         <button class={btn} onClick={() => pick(".wav,audio/wav")}>
           Import WAV
         </button>
-        <button class={btn} disabled={!state()} onClick={save}>
+        <button class={btn} disabled={!loaded()} onClick={save}>
           Save
         </button>
         <span class="flex-1" />
-        <Show when={state()}>
+        <Show when={loaded()}>
           <span class="text-xs text-zinc-500">{name()}.json</span>
         </Show>
       </header>
@@ -102,21 +129,22 @@ export function App() {
 
       <main class="flex-1 p-4">
         <Show
-          when={state()}
+          when={loaded()}
           keyed
           fallback={
             <div class="flex h-full min-h-96 flex-col items-center justify-center gap-4 rounded-lg border border-dashed border-zinc-800 text-zinc-400">
               <p class="text-lg">Drop an annotation .json or a .wav anywhere</p>
               <p class="text-sm text-zinc-600">or</p>
-              <button class={btn} onClick={() => load(makeDemo(), "en-16k")}>
+              <button class={btn} onClick={() => void loadDemo()}>
                 Load demo clip
               </button>
             </div>
           }
         >
-          {(s) => (
+          {(l) => (
             <Annotator
-              initialState={s}
+              initialState={l.state}
+              audioSource={l.source}
               onChange={(next) => {
                 latest = next;
               }}

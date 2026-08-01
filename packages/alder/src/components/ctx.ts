@@ -1,6 +1,7 @@
 import type { Accessor } from "solid-js";
 import type { AnnotatorStore } from "../store";
 import type { Player } from "../player";
+import type { AudioSource } from "../audio";
 
 export interface Viewport {
   /** Left edge of the visible window, seconds. */
@@ -19,6 +20,7 @@ export interface Guide {
 export interface Ctx {
   store: AnnotatorStore;
   player: Player;
+  audioSource: AudioSource;
   view: Accessor<Viewport>;
   setView: (v: Viewport) => void;
   /** Set while dragging so the edges can be lined up against the waveform. */

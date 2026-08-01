@@ -1,4 +1,4 @@
-import { For, Index, Show, createMemo, createSignal } from "solid-js";
+import { For, Index, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 import type { Ctx } from "./ctx";
 import type { SegRec } from "../store";
 import { assignLanes } from "../lanes";
@@ -10,11 +10,54 @@ import { SpeakerSelect } from "./SpeakerSelect";
 import { ContextMenu, MenuItem, type MenuPos, menuPosAt } from "./ContextMenu";
 
 export const LANE_HEIGHT = 72;
+/** Below this scale (px per second) individual word chips are illegible, so skip rendering them. */
+const WORDS_MIN_SCALE = 20;
 const LABEL_HEIGHT = 20;
 /** Vertical gap between a segment block and its lane edges. */
 const LANE_PAD = 4;
 /** Empty strip below the last lane — the right-click-to-add target when lanes are full. */
 const TRACK_PAD = 20;
+const BODY_HEIGHT = LANE_HEIGHT - LANE_PAD * 2 - LABEL_HEIGHT;
+
+/** Zoomed out, in place of unreadable word chips: a canvas tick at each word's
+ * real timeline position. Ticks stay pinned to their timestamps through pan and
+ * zoom, and density reads as text presence — all for one canvas per segment
+ * rather than a DOM node per word. */
+function WordTicks(props: { ctx: Ctx; seg: SegRec; color: () => string }) {
+  let canvas: HTMLCanvasElement | undefined;
+
+  function draw() {
+    props.ctx.view(); // redraw on pan/zoom
+    const fill = props.color() + "99"; // subscribe to color too
+    if (!canvas) return;
+    const l = props.ctx.x(segStart(props.seg));
+    const r = props.ctx.x(segEnd(props.seg, props.ctx.store.lastWordDur()));
+    const w = Math.max(Math.round(r - l), 10);
+    let g: CanvasRenderingContext2D | null = null;
+    try {
+      g = canvas.getContext("2d");
+    } catch {
+      return; // e.g. jsdom
+    }
+    if (!g) return;
+    const dpr = typeof devicePixelRatio === "number" ? devicePixelRatio : 1;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(BODY_HEIGHT * dpr);
+    g.scale(dpr, dpr);
+    g.clearRect(0, 0, w, BODY_HEIGHT);
+    g.fillStyle = fill;
+    const words = props.seg.words;
+    for (let i = 0; i < words.length; i++) {
+      const x = Math.round(props.ctx.x(words[i].timestamp) - l);
+      if (x < 0 || x > w) continue;
+      g.fillRect(x, 0, 1, BODY_HEIGHT);
+    }
+  }
+
+  onMount(draw);
+  createEffect(draw);
+  return <canvas ref={canvas} class="absolute inset-0 h-full w-full" />;
+}
 
 function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
   const { store } = props.ctx;
@@ -31,6 +74,12 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
     const v = props.ctx.view();
     return end() >= v.start && start() <= v.start + v.dur;
   };
+  // Zoomed out, a typical word overlaps its neighbors
+  // into unreadable slivers — mounting one DOM chip per word (10s of thousands, on a
+  // long meeting) just to redraw them on every pan is pure jank. Below this
+  // scale, show a single truncated text preview instead — one node per segment,
+  // so it stays cheap, while still previewing what's here without zooming in.
+  const showWords = () => props.ctx.scale() > WORDS_MIN_SCALE;
 
   const [menu, setMenu] = createSignal<(MenuPos & { splitIdx: number | null }) | null>(null);
 
@@ -123,17 +172,22 @@ function SegmentBlock(props: { ctx: Ctx; seg: SegRec; lane: number }) {
           class="relative"
           style={{ height: `${LANE_HEIGHT - LANE_PAD * 2 - LABEL_HEIGHT}px` }}
         >
-          <Index each={props.seg.words}>
-            {(_, i) => (
-              <WordChip
-                ctx={props.ctx}
-                seg={props.seg}
-                index={i}
-                blockLeft={left()}
-                color={color()}
-              />
-            )}
-          </Index>
+          <Show
+            when={showWords()}
+            fallback={<WordTicks ctx={props.ctx} seg={props.seg} color={color} />}
+          >
+            <Index each={props.seg.words}>
+              {(_, i) => (
+                <WordChip
+                  ctx={props.ctx}
+                  seg={props.seg}
+                  index={i}
+                  blockLeft={left()}
+                  color={color()}
+                />
+              )}
+            </Index>
+          </Show>
         </div>
       </div>
       <Show when={menu()}>

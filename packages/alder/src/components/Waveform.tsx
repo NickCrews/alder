@@ -4,43 +4,20 @@ import { startDrag } from "../drag";
 import { clamp } from "../time";
 
 const HEIGHT = 96;
-const BLOCK = 128;
-
-interface Mipmap {
-  mins: Float32Array;
-  maxs: Float32Array;
-}
-
-function buildMipmap(audio: Float32Array): Mipmap {
-  const n = Math.ceil(audio.length / BLOCK);
-  const mins = new Float32Array(n);
-  const maxs = new Float32Array(n);
-  for (let b = 0; b < n; b++) {
-    let lo = Infinity;
-    let hi = -Infinity;
-    const end = Math.min((b + 1) * BLOCK, audio.length);
-    for (let i = b * BLOCK; i < end; i++) {
-      const v = audio[i];
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
-    }
-    mins[b] = lo === Infinity ? 0 : lo;
-    maxs[b] = hi === -Infinity ? 0 : hi;
-  }
-  return { mins, maxs };
-}
 
 export function Waveform(props: { ctx: Ctx }) {
-  const { store } = props.ctx;
-  const audio = store.audio;
-  const sr = store.sampleRate;
-  const mip = buildMipmap(audio);
+  const source = props.ctx.audioSource;
   let canvas: HTMLCanvasElement | undefined;
 
   function draw() {
     const w = props.ctx.width();
     const { start, dur } = props.ctx.view();
+    // Subscribe: a streaming source redraws as finer data lands.
+    source.version();
     if (!canvas || w <= 0) return;
+    const cols = Math.max(1, Math.round(w));
+    source.prefetch(start, start + dur);
+    const { mins, maxs } = source.peaks(start, start + dur, cols);
     let g: CanvasRenderingContext2D | null = null;
     try {
       g = canvas.getContext("2d");
@@ -61,27 +38,10 @@ export function Waveform(props: { ctx: Ctx }) {
     g.fillStyle = "#38bdf8";
     const mid = HEIGHT / 2;
     const amp = HEIGHT / 2 - 2;
-    for (let col = 0; col < w; col++) {
-      const s0 = Math.max(0, Math.floor((start + (col / w) * dur) * sr));
-      const s1 = Math.min(audio.length, Math.ceil((start + ((col + 1) / w) * dur) * sr));
-      if (s1 <= s0) continue;
-      let lo = Infinity;
-      let hi = -Infinity;
-      if (s1 - s0 > BLOCK * 2) {
-        const b0 = Math.floor(s0 / BLOCK);
-        const b1 = Math.min(mip.mins.length, Math.ceil(s1 / BLOCK));
-        for (let b = b0; b < b1; b++) {
-          if (mip.mins[b] < lo) lo = mip.mins[b];
-          if (mip.maxs[b] > hi) hi = mip.maxs[b];
-        }
-      } else {
-        for (let i = s0; i < s1; i++) {
-          const v = audio[i];
-          if (v < lo) lo = v;
-          if (v > hi) hi = v;
-        }
-      }
-      if (lo === Infinity) continue;
+    for (let col = 0; col < cols; col++) {
+      const lo = mins[col];
+      const hi = maxs[col];
+      if (lo === 0 && hi === 0) continue;
       const y0 = mid - clamp(hi, -1, 1) * amp;
       const y1 = mid - clamp(lo, -1, 1) * amp;
       g.fillRect(col, y0, 1, Math.max(y1 - y0, 1));

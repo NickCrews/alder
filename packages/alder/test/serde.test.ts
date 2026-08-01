@@ -10,8 +10,6 @@ import type { AnnotationState } from "../src/types";
 
 function makeState(): AnnotationState {
   return {
-    audio: new Float32Array([0, 0.5, -0.5, 1, -1, 0.25]),
-    sampleRate: 16000,
     speakers: [
       { id: 0, label: "Alice" },
       { id: 1, label: "Bob" },
@@ -64,18 +62,15 @@ describe("serialize/parse", () => {
   it("round-trips an annotation through the wire format", () => {
     const state = makeState();
     const json = serializeAnnotation(state);
-    expect(json.sample_rate).toBe(16000);
     const back = parseAnnotation(JSON.stringify(json));
-    expect(back.sampleRate).toBe(16000);
-    expect(Array.from(back.audio)).toEqual(Array.from(state.audio));
     expect(back.speakers).toEqual(state.speakers);
     expect(back.segments).toEqual(state.segments);
   });
 
-  it("rejects raw audio without sample_rate", () => {
-    const json = serializeAnnotation(makeState());
-    delete json.sample_rate;
-    expect(() => parseAnnotation(json)).toThrow(/sample_rate/);
+  it("carries no audio in the annotation format", () => {
+    const json = serializeAnnotation(makeState()) as unknown as Record<string, unknown>;
+    expect(json.audio).toBeUndefined();
+    expect(json.sample_rate).toBeUndefined();
   });
 
   it("sorts words defensively on parse", () => {
@@ -86,7 +81,7 @@ describe("serialize/parse", () => {
   });
 });
 
-describe("wav decoding", () => {
+describe("audio decoding", () => {
   it("decodes 16-bit mono PCM", () => {
     const wav = makeWav([0, 0.5, -0.5], 22050);
     const { audio, sampleRate } = decodeAudioBytes(wav);
@@ -104,17 +99,15 @@ describe("wav decoding", () => {
     expect(audio[0]).toBeCloseTo(0.5, 2);
   });
 
-  it("accepts base64 wav inside annotation JSON", () => {
-    const wav = makeWav([0, 0.25, -0.25, 0.5], 8000);
-    const back = parseAnnotation({
-      audio: bytesToBase64(wav),
-      speakers: [],
-      segments: [],
-    });
-    expect(back.sampleRate).toBe(8000);
-    expect(back.audio.length).toBe(4);
-    // Saving re-emits raw f32 + sample_rate
-    const out = serializeAnnotation(back);
-    expect(out.sample_rate).toBe(8000);
+  it("decodes raw float32 given a sample rate", () => {
+    const raw = new Uint8Array(new Float32Array([0, 0.25, -0.25, 0.5]).buffer);
+    const { audio, sampleRate } = decodeAudioBytes(raw, 8000);
+    expect(sampleRate).toBe(8000);
+    expect(Array.from(audio)).toEqual([0, 0.25, -0.25, 0.5]);
+  });
+
+  it("rejects raw float32 without a sample rate", () => {
+    const raw = new Uint8Array(new Float32Array([0, 0.25]).buffer);
+    expect(() => decodeAudioBytes(raw)).toThrow(/sample_rate/);
   });
 });

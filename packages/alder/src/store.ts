@@ -37,13 +37,17 @@ const MAX_HISTORY = 200;
 
 export type AnnotatorStore = ReturnType<typeof createAnnotatorStore>;
 
-export function createAnnotatorStore(
-  initial: AnnotationState,
-  onChange?: (state: AnnotationState) => void,
-) {
-  const audio = initial.audio;
-  const sampleRate = initial.sampleRate;
-  const duration = audio.length / sampleRate;
+export interface StoreOptions {
+  /** Length of the audio in seconds — the timeline edits are clamped against.
+   * Audio lives in an {@link AudioSource}, so the store is told its duration
+   * rather than measuring it. */
+  duration: number;
+  /** Fired with the full annotation after every committed edit. */
+  onChange?: (state: AnnotationState) => void;
+}
+
+export function createAnnotatorStore(initial: AnnotationState, opts: StoreOptions) {
+  const { duration, onChange } = opts;
 
   const toRec = (s: { speaker_id: number; words: Word[] }): SegRec => ({
     key: nextKey++,
@@ -178,8 +182,6 @@ export function createAnnotatorStore(
       .map((s) => ({ speaker_id: s.speaker_id, words: s.words.map((w) => ({ ...w })) }))
       .sort((a, b) => segStart(a) - segStart(b));
     return {
-      audio,
-      sampleRate,
       speakers: doc.speakers.map((s) => ({ ...s })),
       segments,
     };
@@ -742,8 +744,6 @@ export function createAnnotatorStore(
 
   return {
     doc,
-    audio,
-    sampleRate,
     duration,
     selection,
     setSelection,

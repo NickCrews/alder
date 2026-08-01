@@ -1,7 +1,7 @@
 import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import type { AnnotationState } from "../types";
 import { createAnnotatorStore } from "../store";
-import { createPlayer } from "../player";
+import type { AudioSource } from "../audio";
 import { clamp } from "../time";
 import { runsToHtml, runsToText } from "../clipboard";
 import { ensureStyles } from "../ensureStyles";
@@ -19,7 +19,13 @@ export interface AnnotatorHandle {
 }
 
 export interface AnnotatorProps {
+  /** The transcript to edit. Audio is supplied separately via {@link audioSource}. */
   initialState: AnnotationState;
+  /** Where the waveform and playback get their audio. Use `bufferSourceFromBytes`
+   * (or `bufferSource`) for samples in memory, or `urlSource` to stream long
+   * audio so nothing but the envelope crosses into the tab. The caller owns it:
+   * the annotator never destroys a source it didn't create. */
+  audioSource: AudioSource;
   /** Fired with the full annotation after every committed edit. */
   onChange?: (state: AnnotationState) => void;
   ref?: (handle: AnnotatorHandle) => void;
@@ -30,10 +36,15 @@ const MIN_VIEW_DUR = 0.05;
 
 export function Annotator(props: AnnotatorProps) {
   ensureStyles();
+  // eslint-disable-next-line solid/reactivity -- audio is fixed for the life of the instance
+  const source = props.audioSource;
   // eslint-disable-next-line solid/reactivity -- initialState is intentionally captured once
-  const store = createAnnotatorStore(props.initialState, (s) => props.onChange?.(s));
-  const player = createPlayer(store.audio, store.sampleRate);
-  const duration = Math.max(store.duration, MIN_VIEW_DUR);
+  const store = createAnnotatorStore(props.initialState, {
+    duration: source.duration,
+    onChange: (s) => props.onChange?.(s),
+  });
+  const player = source.createPlayer();
+  const duration = Math.max(source.duration, MIN_VIEW_DUR);
 
   const [view, setViewRaw] = createSignal<Viewport>({ start: 0, dur: duration });
   const [width, setWidth] = createSignal(800);
@@ -51,6 +62,7 @@ export function Annotator(props: AnnotatorProps) {
   const ctx: Ctx = {
     store,
     player,
+    audioSource: source,
     view,
     setView,
     guide,
@@ -118,7 +130,7 @@ export function Annotator(props: AnnotatorProps) {
     if (runs.some((r) => r.label)) {
       items["text/html"] = new Blob([runsToHtml(runs)], { type: "text/html" });
     }
-    void navigator.clipboard?.write?.([new ClipboardItem(items)]).catch(() => {});
+    void navigator.clipboard?.write?.([new ClipboardItem(items)]).catch(() => { });
     return true;
   }
 

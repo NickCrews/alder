@@ -4,10 +4,9 @@ import { createAnnotatorStore } from "../src/store";
 import { LAST_WORD_DURATION } from "../src/time";
 import type { AnnotationState } from "../src/types";
 
+/** 10s of audio; see `withStore` for where the duration is supplied. */
 function makeState(): AnnotationState {
   return {
-    audio: new Float32Array(16000 * 10), // 10s of silence
-    sampleRate: 16000,
     speakers: [
       { id: 0, label: "Alice" },
       { id: 1, label: "Bob" },
@@ -28,7 +27,7 @@ function makeState(): AnnotationState {
 
 function withStore<T>(fn: (store: ReturnType<typeof createAnnotatorStore>) => T): T {
   return createRoot((dispose) => {
-    const store = createAnnotatorStore(makeState());
+    const store = createAnnotatorStore(makeState(), { duration: 10 });
     const result = fn(store);
     dispose();
     return result;
@@ -409,7 +408,7 @@ describe("store ops", () => {
 
     it("falls back to the constant for an empty document", () => {
       createRoot((dispose) => {
-        const s = createAnnotatorStore({ ...makeState(), segments: [] });
+        const s = createAnnotatorStore({ ...makeState(), segments: [] }, { duration: 10 });
         expect(s.lastWordDur()).toBe(LAST_WORD_DURATION);
         dispose();
       });
@@ -417,7 +416,7 @@ describe("store ops", () => {
 
     it("grows from the fallback once the document has a pair to measure", () => {
       createRoot((dispose) => {
-        const s = createAnnotatorStore({ ...makeState(), segments: [] });
+        const s = createAnnotatorStore({ ...makeState(), segments: [] }, { duration: 10 });
         s.createSegment(1.0);
         expect(s.lastWordDur()).toBe(LAST_WORD_DURATION); // one lone word, nothing to measure
         s.setState({
@@ -456,7 +455,7 @@ describe("store ops", () => {
   it("fires onChange on committed ops only", () => {
     createRoot((dispose) => {
       let count = 0;
-      const s = createAnnotatorStore(makeState(), () => count++);
+      const s = createAnnotatorStore(makeState(), { duration: 10, onChange: () => count++ });
       s.beginOp();
       s.moveWord(s.doc.segments[0].key, 0, 1.2);
       expect(count).toBe(0); // mid-drag

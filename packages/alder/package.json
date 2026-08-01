@@ -10,9 +10,12 @@
       "import": "./src/index.ts"
     }
   },
+  "bin": {
+    "alder": "./dist/cli/alder.js"
+  },
   "files": ["src", "dist"],
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && vite build -c vite.cli-app.config.ts && vite build -c vite.cli.config.ts && chmod +x dist/cli/alder.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -21,8 +24,10 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.11",
+    "@types/node": "^22.10.0",
     "jsdom": "^26.1.0",
     "solid-js": "^1.9.7",
+    "vite-plugin-singlefile": "^2.2.0",
     "tailwindcss": "^4.1.11",
     "typescript": "^5.8.3",
     "vite": "^6.3.5",

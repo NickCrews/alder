@@ -1,9 +1,23 @@
-import { createSignal } from "solid-js";
+import { createSignal, type Accessor } from "solid-js";
 import { clamp } from "./time";
+
+/** Transport controls the UI drives, however the audio is actually sourced. */
+export interface Player {
+  playing: Accessor<boolean>;
+  time: Accessor<number>;
+  duration: number;
+  rate: Accessor<number>;
+  setRate(rate: number): void;
+  play(): void;
+  pause(): void;
+  toggle(): void;
+  seek(time: number): void;
+  destroy(): void;
+}
 
 /** Web Audio playback for a Float32Array. No-ops in environments without
  * AudioContext (e.g. jsdom). */
-export function createPlayer(audio: Float32Array, sampleRate: number) {
+export function createBufferPlayer(audio: Float32Array, sampleRate: number): Player {
   const duration = audio.length / sampleRate;
   const [playing, setPlaying] = createSignal(false);
   const [time, setTime] = createSignal(0);
@@ -120,4 +134,79 @@ export function createPlayer(audio: Float32Array, sampleRate: number) {
   return { playing, time, duration, rate, setRate, play, pause, toggle, seek, destroy };
 }
 
-export type Player = ReturnType<typeof createPlayer>;
+/** Playback straight from a URL. The browser streams and seeks with range
+ * requests, so a three-hour file costs no memory here. `duration` is supplied
+ * rather than read off the element, because the element only learns it after
+ * metadata arrives — and for a long WAV that can be a whole download. */
+export function createElementPlayer(url: string, duration: number): Player {
+  const [playing, setPlaying] = createSignal(false);
+  const [time, setTime] = createSignal(0);
+  const [rate, setRateSignal] = createSignal(1);
+  let raf = 0;
+
+  const el = typeof Audio !== "undefined" ? new Audio() : null;
+  if (el) {
+    el.src = url;
+    el.preload = "auto";
+    el.addEventListener("ended", () => {
+      setPlaying(false);
+      cancelAnimationFrame(raf);
+      setTime(duration);
+    });
+    el.addEventListener("pause", () => {
+      setPlaying(false);
+      cancelAnimationFrame(raf);
+    });
+  }
+
+  function tick() {
+    if (el) setTime(clamp(el.currentTime, 0, duration));
+    if (playing()) raf = requestAnimationFrame(tick);
+  }
+
+  function play() {
+    if (!el || playing()) return;
+    if (el.currentTime >= duration - 0.01) el.currentTime = 0;
+    void el.play().catch(() => setPlaying(false));
+    setPlaying(true);
+    raf = requestAnimationFrame(tick);
+  }
+
+  function pause() {
+    if (!el || !playing()) return;
+    el.pause();
+    setTime(clamp(el.currentTime, 0, duration));
+    setPlaying(false);
+    cancelAnimationFrame(raf);
+  }
+
+  return {
+    playing,
+    time,
+    duration,
+    rate,
+    setRate(r) {
+      const target = clamp(r, 0.25, 4);
+      if (target === rate()) return;
+      if (el) el.playbackRate = target;
+      setRateSignal(target);
+    },
+    play,
+    pause,
+    toggle: () => (playing() ? pause() : play()),
+    seek(t) {
+      const target = clamp(t, 0, duration);
+      setTime(target);
+      if (el) el.currentTime = target;
+    },
+    destroy() {
+      cancelAnimationFrame(raf);
+      setPlaying(false);
+      if (el) {
+        el.pause();
+        el.removeAttribute("src");
+        el.load();
+      }
+    },
+  };
+}

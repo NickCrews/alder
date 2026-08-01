@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { mountAnnotator } from "../src/mount";
+import { bufferSource } from "../src/audio";
 import type { AnnotationState } from "../src/types";
 
 function makeState(): AnnotationState {
   return {
-    audio: new Float32Array(8000),
-    sampleRate: 8000,
     speakers: [{ id: 0, label: "Alice" }],
     segments: [
       {
@@ -21,12 +20,13 @@ function makeState(): AnnotationState {
 }
 
 describe("mountAnnotator", () => {
-  it("mounts, exposes state, and unmounts", () => {
+  it("mounts, exposes state, and unmounts", async () => {
     const el = document.createElement("div");
     document.body.appendChild(el);
     const changes: AnnotationState[] = [];
     const handle = mountAnnotator(el, {
       initialState: makeState(),
+      audioSource: await bufferSource(new Float32Array(8000), 8000),
       onChange: (s) => changes.push(s),
     });
 

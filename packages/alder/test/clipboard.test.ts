@@ -8,8 +8,6 @@ import type { AnnotationState } from "../src/types";
  * 0.5s — so the median word gap, and every duration derived from it, is 0.5s. */
 function makeState(): AnnotationState {
   return {
-    audio: new Float32Array(16000 * 10),
-    sampleRate: 16000,
     speakers: [
       { id: 0, label: "Alice" },
       { id: 1, label: "Bob" },
@@ -32,7 +30,7 @@ type Store = ReturnType<typeof createAnnotatorStore>;
 
 function withStore<T>(fn: (store: Store) => T): T {
   return createRoot((dispose) => {
-    const store = createAnnotatorStore(makeState());
+    const store = createAnnotatorStore(makeState(), { duration: 10 });
     const result = fn(store);
     dispose();
     return result;

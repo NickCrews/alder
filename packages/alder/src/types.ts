@@ -18,20 +18,12 @@ export interface Segment {
   words: Word[];
 }
 
+/** The editable document: who spoke and what they said. It is also the JSON
+ * wire format — `serializeAnnotation` emits exactly this shape. Audio is a
+ * separate concern: it reaches the annotator through an {@link AudioSource},
+ * never as part of this state, and the two travel as sidecar resources (see the
+ * CLI, which pairs a `.psv` transcript with its `.wav`). */
 export interface AnnotationState {
-  audio: Float32Array;
-  /** Samples per second of `audio`. */
-  sampleRate: number;
-  speakers: Speaker[];
-  segments: Segment[];
-}
-
-/** JSON wire format. `audio` is base64: either a WAV file (sniffed by RIFF
- * magic) or raw little-endian float32 mono PCM, in which case `sample_rate`
- * is required. Serialization always emits raw f32 + sample_rate. */
-export interface AnnotationJSON {
-  sample_rate?: number;
-  audio: string;
   speakers: Speaker[];
   segments: Segment[];
 }
