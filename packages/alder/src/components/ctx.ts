@@ -20,6 +20,8 @@ export interface Guide {
 export interface Ctx {
   store: AnnotatorStore;
   player: Player;
+  /** The audio, which may still be loading — read `audioSource.geometry()` for
+   * how far along it is; `peaks` answers with whatever has arrived. */
   audioSource: AudioSource;
   view: Accessor<Viewport>;
   setView: (v: Viewport) => void;
@@ -27,7 +29,9 @@ export interface Ctx {
   guide: Accessor<Guide | null>;
   setGuide: (g: Guide | null) => void;
   width: Accessor<number>;
-  duration: number;
+  /** Timeline length in seconds — the transcript's extent until audio loads,
+   * then the audio length. Reactive; widens when the source arrives. */
+  duration: Accessor<number>;
   /** time (s) -> px within the timeline area */
   x: (t: number) => number;
   /** px -> time (s) */

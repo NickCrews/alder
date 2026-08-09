@@ -4,20 +4,28 @@ import {
   base64ToBytes,
   bufferSourceFromBytes,
   parseAnnotation,
+  emptyAnnotation,
   serializeAnnotationString,
+  urlSource,
   type AnnotationState,
   type AudioSource,
 } from "@nickcrews/alder";
-import { makeDemo } from "./demo";
+// 3.85s JFK clip, 16 kHz mono float32. Vendored from open-minutes' pipeline
+// test fixture (the sherpa/NeMo "en.wav" sample). Audio and transcript are
+// separate sidecar resources: the transcript is plain JSON, the audio a real
+// WAV inlined as a data URI so the single-file build stays self-contained.
+import annotationJson from "./assets/en-16k.json?raw";
+import wavUrl from "./assets/en-16k.wav?inline";
 
 const btn =
   "rounded border border-zinc-700 bg-zinc-800 px-3 py-1 text-sm hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40";
 
 /** Audio and transcript are separate resources now: the annotator edits the
  * `state` and reads samples from the `source`. We pair them here for the life
- * of one loaded clip. */
+ * of one loaded clip. `state` is null when we opened audio with no transcript
+ * to go with it — the annotator starts blank in that case. */
 interface Loaded {
-  state: AnnotationState;
+  state: AnnotationState | null;
   source: AudioSource;
 }
 
@@ -25,6 +33,7 @@ export function App() {
   const [loaded, setLoaded] = createSignal<Loaded | null>(null);
   const [name, setName] = createSignal("annotation");
   const [error, setError] = createSignal<string | null>(null);
+  const [url, setUrl] = createSignal("");
   // Latest committed annotation (updated by onChange); what Save writes.
   let latest: AnnotationState | null = null;
 
@@ -48,30 +57,32 @@ export function App() {
         if (typeof raw.audio !== "string") {
           throw new Error("This JSON has no embedded audio — import a WAV to pair with it.");
         }
-        const source = await bufferSourceFromBytes(base64ToBytes(raw.audio), raw.sample_rate);
+        const source = bufferSourceFromBytes(base64ToBytes(raw.audio), raw.sample_rate);
         load({ state, source }, file.name);
       } else {
         const bytes = new Uint8Array(await file.arrayBuffer());
-        const source = await bufferSourceFromBytes(bytes);
-        load(
-          {
-            state: { speakers: [{ id: 0, label: "Speaker 1" }], segments: [] },
-            source,
-          },
-          file.name,
-        );
+        const source = bufferSourceFromBytes(bytes);
+        load({ state: null, source }, file.name);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  async function loadDemo() {
-    try {
-      load(await makeDemo(), "en-16k");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+  /** The bundled clip is a data-URI WAV, so it loads down the same path as any
+   * other URL — nothing to fetch or decode here. */
+  function loadDemo() {
+    load({ state: parseAnnotation(annotationJson), source: urlSource(wavUrl) }, "en-16k");
+  }
+
+  /** Stream a WAV straight from a URL — no download, no decode up front. A URL
+   * that turns out to be bad isn't an error here: the source never throws for
+   * it, it reports the failure through `geometry`, and the annotator says so on
+   * the waveform while the transcript stays editable. */
+  function loadUrl() {
+    const href = url().trim();
+    if (!href) return;
+    load({ state: null, source: urlSource(href) }, href.split("/").pop());
   }
 
   function pick(accept: string) {
@@ -83,8 +94,11 @@ export function App() {
   }
 
   function save() {
-    if (!latest) return;
-    const blob = new Blob([serializeAnnotationString(latest)], { type: "application/json" });
+    // Nothing edited yet on a bare audio load: write the blank transcript the
+    // annotator is showing rather than doing nothing.
+    const blob = new Blob([serializeAnnotationString(latest ?? emptyAnnotation())], {
+      type: "application/json",
+    });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `${name()}.json`;
@@ -134,8 +148,26 @@ export function App() {
           fallback={
             <div class="flex h-full min-h-96 flex-col items-center justify-center gap-4 rounded-lg border border-dashed border-zinc-800 text-zinc-400">
               <p class="text-lg">Drop an annotation .json or a .wav anywhere</p>
+              <p class="text-sm text-zinc-600">or load a WAV by URL</p>
+              <form
+                class="flex items-center gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  loadUrl();
+                }}
+              >
+                <input
+                  class="w-96 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-100"
+                  value={url()}
+                  placeholder="https://example.com/audio.wav"
+                  onInput={(e) => setUrl(e.currentTarget.value)}
+                />
+                <button class={btn} type="submit">
+                  Load URL
+                </button>
+              </form>
               <p class="text-sm text-zinc-600">or</p>
-              <button class={btn} onClick={() => void loadDemo()}>
+              <button class={btn} onClick={loadDemo}>
                 Load demo clip
               </button>
             </div>

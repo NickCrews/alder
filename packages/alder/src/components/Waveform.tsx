@@ -1,4 +1,4 @@
-import { createEffect, onMount } from "solid-js";
+import { Show, createEffect, onMount } from "solid-js";
 import type { Ctx } from "./ctx";
 import { startDrag } from "../drag";
 import { clamp } from "../time";
@@ -7,6 +7,11 @@ const HEIGHT = 96;
 
 export function Waveform(props: { ctx: Ctx }) {
   const source = props.ctx.audioSource;
+  /** The load error, if the source ended up with one. */
+  const failure = () => {
+    const s = source.geometry();
+    return s.state === "failed" ? s.error : null;
+  };
   let canvas: HTMLCanvasElement | undefined;
 
   function draw() {
@@ -73,6 +78,13 @@ export function Waveform(props: { ctx: Ctx }) {
       onPointerDown={onPointerDown}
     >
       <canvas ref={canvas} class="absolute inset-0 h-full w-full" />
+      <Show when={source.geometry().state !== "known"}>
+        <div class="pointer-events-none absolute inset-0 flex items-center justify-center text-xs">
+          <Show when={failure()} fallback={<span class="text-zinc-500">Loading audio…</span>}>
+            {(err) => <span class="text-red-400">Audio failed to load: {err().message}</span>}
+          </Show>
+        </div>
+      </Show>
     </div>
   );
 }

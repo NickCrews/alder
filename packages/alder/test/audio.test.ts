@@ -38,12 +38,16 @@ function wavBytes(samples: Float32Array, sampleRate: number): Uint8Array {
 }
 
 describe("bufferSource", () => {
-  it("reports duration from the sample count", async () => {
-    expect((await bufferSource(makeAudio(), 100)).duration).toBe(4);
+  it("is ready on construction, with duration from the sample count", () => {
+    expect(bufferSource(makeAudio(), 100).geometry()).toEqual({
+      state: "known",
+      duration: 4,
+      sampleRate: 100,
+    });
   });
 
-  it("puts the envelope only where the signal is", async () => {
-    const src = await bufferSource(makeAudio(), 100);
+  it("puts the envelope only where the signal is", () => {
+    const src = bufferSource(makeAudio(), 100);
     const { mins, maxs } = src.peaks(0, 4, 4);
     expect([mins[0], maxs[0]]).toEqual([0, 0]);
     expect([mins[1], maxs[1]]).toEqual([0, 0]);
@@ -52,8 +56,8 @@ describe("bufferSource", () => {
     expect([mins[3], maxs[3]]).toEqual([0, 0]);
   });
 
-  it("agrees with itself across zoom levels", async () => {
-    const src = await bufferSource(makeAudio(), 100);
+  it("agrees with itself across zoom levels", () => {
+    const src = bufferSource(makeAudio(), 100);
     // One column over the loud second, whether reached wide or narrow.
     expect(src.peaks(2, 3, 1).maxs[0]).toBeCloseTo(src.peaks(0, 4, 4).maxs[2], 5);
   });
@@ -92,10 +96,21 @@ function rangeServer(file: Uint8Array, ignoreRange = false) {
 describe("urlSource", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("hands back a usable source before the header has landed", () => {
+    rangeServer(wavBytes(makeAudio(), 100));
+    const src = urlSource("/audio.wav");
+    // Nothing awaited: the source exists, says so, and answers a flat envelope
+    // rather than making the caller wait for one.
+    expect(src.geometry()).toEqual({ state: "pending" });
+    expect(src.duration()).toBe(null);
+    expect(Array.from(src.peaks(0, 4, 2).maxs)).toEqual([0, 0]);
+    expect(() => src.createPlayer()).not.toThrow();
+  });
+
   it("downloads and decodes a small file whole (exact envelope)", async () => {
     const ranges = rangeServer(wavBytes(makeAudio(), 100));
-    const src = await urlSource("/audio.wav");
-    expect(src.duration).toBe(4);
+    const src = urlSource("/audio.wav");
+    await vi.waitFor(() => expect(src.duration()).toBe(4));
     // Small file (844 bytes): the header probe already returned everything, no
     // second request.
     expect(ranges).toEqual(["0-843"]);
@@ -104,14 +119,23 @@ describe("urlSource", () => {
 
   it("falls back to a whole-file download when the host ignores Range", async () => {
     rangeServer(wavBytes(makeAudio(), 100), true);
-    const src = await urlSource("/audio.wav");
-    expect(src.duration).toBe(4);
+    const src = urlSource("/audio.wav");
+    await vi.waitFor(() => expect(src.duration()).toBe(4));
     expect(src.peaks(2, 3, 1).maxs[0]).toBeCloseTo(0.8, 3);
   });
 
-  it("surfaces a failed fetch", async () => {
+  it("reports a failed fetch as its own state rather than throwing", async () => {
     vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, status: 404 }));
-    await expect(urlSource("/missing.wav")).rejects.toThrow(/audio request failed: 404/);
+    const src = urlSource("/missing.wav");
+    await vi.waitFor(() =>
+      expect(src.geometry()).toMatchObject({
+        state: "failed",
+        error: expect.objectContaining({ message: expect.stringMatching(/audio request failed: 404/) }),
+      }),
+    );
+    // Still a source: it just has nothing to show.
+    expect(src.duration()).toBe(null);
+    expect(Array.from(src.peaks(0, 4, 2).maxs)).toEqual([0, 0]);
   });
 });
 
@@ -130,8 +154,7 @@ describe("wavRangeSource", () => {
     const file = longWav();
     rangeServer(file);
     const src = wavRangeSource("/audio.wav", parseWavHeader(file, file.length));
-    expect(src.duration).toBe(200);
-    expect(src.sampleRate).toBe(100);
+    expect(src.geometry()).toEqual({ state: "known", duration: 200, sampleRate: 100 });
     // The overview arrives probe by probe; wait for the loud region to register.
     await vi.waitFor(() => expect(src.peaks(100, 101, 1).maxs[0]).toBeGreaterThan(0.5));
   });

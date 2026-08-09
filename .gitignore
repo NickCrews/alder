@@ -2,3 +2,7 @@ node_modules/
 dist/
 *.local
 .DS_Store
+
+# Big WAVs dropped in by hand to exercise range-streamed playback against the
+# dev server. Fixtures the build actually needs live in src/assets, not here.
+packages/alder-standalone/public/*.wav

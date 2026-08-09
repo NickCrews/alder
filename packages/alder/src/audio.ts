@@ -9,23 +9,70 @@ export interface Peaks {
   maxs: Float32Array;
 }
 
+/** How long the audio is and how finely it's sampled — the shape of the clip,
+ * as opposed to its contents.
+ *
+ * It's learned in a single step (a header parse, or simply holding the samples),
+ * so the two numbers are never known apart, and a source that failed to load has
+ * neither. One union rather than three nullable fields keeps "half-known
+ * geometry" and "known but broken" from being writable at all, and gives every
+ * consumer one question to ask instead of three.
+ *
+ * `failed` is terminal and only ever about the header: once the geometry is
+ * known, a later range request that fails costs a flat bucket or a coarse span,
+ * not the source. */
+export type AudioGeometry =
+  | { readonly state: "pending" }
+  | { readonly state: "known"; readonly duration: number; readonly sampleRate: number }
+  | { readonly state: "failed"; readonly error: Error };
+
+const PENDING: AudioGeometry = { state: "pending" };
+
 /** Where an annotator gets its audio. {@link bufferSource} holds samples in
  * memory; {@link urlSource} streams a WAV from a static URL over `Range`
- * requests, pulling only the bytes the current view needs. */
+ * requests, pulling only the bytes the current view needs.
+ *
+ * A source exists from the moment you construct it, whether or not its bytes
+ * have arrived: `geometry` reports whether the clip's shape is known yet,
+ * `peaks` answers with whatever samples it has so far, and `createPlayer` hands
+ * back a working transport regardless. Loading is a state a source passes
+ * through, not a promise the caller has to await before it has anything to
+ * show. */
 export interface AudioSource {
-  readonly duration: number;
-  readonly sampleRate: number;
+  /** The clip's shape once it's known, or why it never will be. Reactive: read
+   * it in a tracking scope to re-render when the audio lands. */
+  readonly geometry: Accessor<AudioGeometry>;
+  /** How long the clip is in seconds, or null while that's unknown (or
+   * unknowable, the header having failed) — the projection of {@link geometry}
+   * that nearly every caller actually wants. Reactive, like `geometry`. */
+  readonly duration: Accessor<number | null>;
   /** Bumped when freshly-arrived data would change what `peaks` returns. Read
    * it inside a reactive scope to redraw. */
   readonly version: Accessor<number>;
   /** Envelope over `[start, end)` split into `columns` columns. Synchronous
-   * and best-effort: a streaming source answers from whatever it has cached. */
+   * and best-effort: a source answers from whatever samples it has cached,
+   * which is nothing (a flat line) until the first bytes land.
+   *
+   * Deliberately *not* hung off `geometry`'s `known` variant. Sample coverage
+   * is a different axis from the clip's shape and moves on its own schedule: a
+   * streamed WAV knows its geometry from the header while its overview is still
+   * entirely empty, then fills in probe by probe, then sharpens to exact samples
+   * where you zoom. There is no moment at which peaks become "available", so
+   * there is no variant to put them on — `version` is the axis that tracks them,
+   * and every caller wants the same flat line in the meantime anyway. */
   peaks(start: number, end: number, columns: number): Peaks;
   /** Hint that this span is about to be drawn, so finer data can be fetched. */
   prefetch(start: number, end: number): void;
+  /** A transport for this audio. Safe to call before the audio has loaded —
+   * commands issued early take effect when playback becomes possible. */
   createPlayer(): Player;
   destroy(): void;
 }
+
+const emptyPeaks = (columns: number): Peaks => ({
+  mins: new Float32Array(columns),
+  maxs: new Float32Array(columns),
+});
 
 const MIP_BLOCK = 128;
 
@@ -79,22 +126,22 @@ function envelope(
 }
 
 /** All samples in memory — the classic path, used whenever the caller already
- * holds decoded audio. Async only so it shares one shape with the sources that
- * genuinely fetch ({@link urlSource}); the work here is synchronous and the
- * promise settles in the same tick. */
-export async function bufferSource(
-  audio: Float32Array,
-  sampleRate: number,
-): Promise<AudioSource> {
+ * holds decoded audio. The samples *are* the geometry, so it's known the moment
+ * the source is built and never changes after. */
+export function bufferSource(audio: Float32Array, sampleRate: number): AudioSource {
   const mip = buildMipmap(audio, MIP_BLOCK);
   const version = () => 0;
-  return {
+  const geometry: AudioGeometry = {
+    state: "known",
     duration: audio.length / sampleRate,
     sampleRate,
+  };
+  return {
+    geometry: () => geometry,
+    duration: () => geometry.duration,
     version,
     peaks(start, end, columns) {
-      const mins = new Float32Array(columns);
-      const maxs = new Float32Array(columns);
+      const { mins, maxs } = emptyPeaks(columns);
       const dur = end - start;
       for (let col = 0; col < columns; col++) {
         const s0 = Math.max(0, Math.floor((start + (col / columns) * dur) * sampleRate));
@@ -115,11 +162,12 @@ export async function bufferSource(
 }
 
 /** Decode WAV or raw float32 bytes and hold the samples in memory. Raw
- * (non-WAV) float32 needs `fallbackSampleRate`. */
-export async function bufferSourceFromBytes(
+ * (non-WAV) float32 needs `fallbackSampleRate`. Throws on bytes it can't
+ * decode — the caller handed them over, so the caller hears about it. */
+export function bufferSourceFromBytes(
   bytes: Uint8Array,
   fallbackSampleRate?: number,
-): Promise<AudioSource> {
+): AudioSource {
   const { audio, sampleRate } = decodeAudioBytes(bytes, fallbackSampleRate);
   return bufferSource(audio, sampleRate);
 }
@@ -165,9 +213,56 @@ function rangeTotal(res: Response): number | null {
  * seeks. Small files, non-WAV bytes, or hosts that ignore `Range` fall back to
  * downloading and decoding the whole thing (see {@link bufferSourceFromBytes}).
  *
- * The promise settles once the audio is playable and its duration is known;
- * the overview streams in afterward, bumping `version` as probes land. */
-export async function urlSource(url: string): Promise<AudioSource> {
+ * Returns immediately, with `geometry` reading `pending`. The header lands a
+ * moment later and flips it to `known` (or `failed`); the overview streams in
+ * after that, bumping `version` as probes land. Nothing here is worth blocking a
+ * render on: a transcript is editable, and a player usable, long before the
+ * first sample arrives. */
+export function urlSource(url: string): AudioSource {
+  const [inner, setInner] = createSignal<AudioSource>();
+  // Only consulted before `inner` exists: once there's a real source, it owns
+  // the geometry. Holding the object (not a flag) keeps its identity stable, so
+  // reading `geometry()` in a memo doesn't invalidate on every read.
+  const [unresolved, setUnresolved] = createSignal<AudioGeometry>(PENDING);
+  let disposed = false;
+
+  void openUrl(url).then(
+    (s) => {
+      if (disposed) return s.destroy(); // torn down before the header landed
+      setInner(() => s);
+    },
+    (err: unknown) => {
+      setUnresolved({
+        state: "failed",
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+    },
+  );
+
+  const duration = () => inner()?.duration() ?? null;
+
+  return {
+    geometry: () => inner()?.geometry() ?? unresolved(),
+    duration,
+    version: () => inner()?.version() ?? 0,
+    peaks: (start, end, columns) => inner()?.peaks(start, end, columns) ?? emptyPeaks(columns),
+    prefetch: (start, end) => inner()?.prefetch(start, end),
+    // The element only needs the URL, so playback is available immediately —
+    // the browser does its own buffering, and honours a `currentTime` set
+    // before metadata arrives. It plays the URL even when the overview above
+    // ended up decoding the file whole; one extra cached request beats making
+    // the transport wait on the waveform's bytes.
+    createPlayer: () => createElementPlayer(url, duration),
+    destroy() {
+      disposed = true;
+      inner()?.destroy();
+    },
+  };
+}
+
+/** Probe the header and pick the implementation the file deserves: a streaming
+ * range source, or the whole thing in memory. */
+async function openUrl(url: string): Promise<AudioSource> {
   const probe = await fetch(url, { headers: { Range: `bytes=0-${HEADER_PROBE - 1}` } });
   if (!probe.ok && probe.status !== 206) throw new Error(`audio request failed: ${probe.status}`);
   const head = new Uint8Array(await probe.arrayBuffer());
@@ -201,6 +296,11 @@ export async function urlSource(url: string): Promise<AudioSource> {
 export function wavRangeSource(url: string, header: WavHeader): AudioSource {
   const { sampleRate, dataOffset, dataLength, bytesPerFrame, frameCount } = header;
   const duration = header.durationSec;
+  // The header is the geometry, and we already have it: a range source knows its
+  // shape from birth even though not one sample has arrived. Later range
+  // failures are per-probe and survivable (a flat bucket, a coarse span), not a
+  // reason to call the source broken.
+  const geometry: AudioGeometry = { state: "known", duration, sampleRate };
   const [version, setVersion] = createSignal(0);
   const bump = () => setVersion((v) => v + 1);
 
@@ -272,13 +372,12 @@ export function wavRangeSource(url: string, header: WavHeader): AudioSource {
   }
 
   return {
-    duration,
-    sampleRate,
+    geometry: () => geometry,
+    duration: () => duration,
     version,
     peaks(start, end, columns) {
       version(); // subscribe: a redraw must follow every arrival
-      const mins = new Float32Array(columns);
-      const maxs = new Float32Array(columns);
+      const { mins, maxs } = emptyPeaks(columns);
       const dur = end - start;
       const f = fine;
       const useFine = f && start >= f.start && end <= f.end;
@@ -318,7 +417,7 @@ export function wavRangeSource(url: string, header: WavHeader): AudioSource {
       const s = Math.max(0, Math.min(mid - pad / 2, duration - pad));
       void fetchFine(s, s + pad);
     },
-    createPlayer: () => createElementPlayer(url, duration),
+    createPlayer: () => createElementPlayer(url, () => duration),
     destroy() {
       alive = false;
       fine = null;

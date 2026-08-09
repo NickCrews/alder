@@ -123,33 +123,53 @@ are `H:MM:SS.ss`, and round-trip at that centisecond resolution.
   SolidJS library, and the `alder` CLI (`cli/`).
 - **`packages/alder-standalone`** (`@nickcrews/alder-standalone`) — builds a
   fully self-contained `dist/index.html` (works from `file://`): open/save
-  annotation JSON, import a WAV, drag & drop, and a bundled demo clip
-  (`src/assets/en-16k.wav`, the 3.85 s "Ask not what your country…" sample,
-  with estimated word timings to correct).
+  annotation JSON, import a WAV, drag & drop, stream a WAV from a URL, and a
+  bundled demo clip (`src/assets/en-16k.wav`, the 3.85 s "Ask not what your
+  country…" sample, with estimated word timings to correct).
 
 ## Using the library
 
 As a Solid component (uncontrolled; wrap `onChange`/`ref` to make it controlled):
 
 ```tsx
-import { createResource, Show } from "solid-js";
-import { Annotator, parseAnnotation, urlSource } from "@nickcrews/alder";
+import { Annotator, parseAnnotation } from "@nickcrews/alder";
 
-// Source construction is async, so resolve it before rendering.
-const [source] = createResource(() => urlSource("/audio.wav"));
-
-<Show when={source()} fallback={<p>Loading audio…</p>}>
-  <Annotator
-    initialState={parseAnnotation(json)}   // transcript only
-    audioSource={source()!}                // audio, supplied separately
-    onChange={(state) => console.log("edited", state)}
-    ref={(handle) => {
-      // handle.getState() / handle.setState(state)
-      // setState replaces speakers/segments; audio is fixed per instance (remount to change it)
-    }}
-  />
-</Show>;
+<Annotator
+  initialState={parseAnnotation(json)}                   // transcript only
+  audioSource="https://static.example.com/meeting.wav"   // audio, supplied separately
+  onChange={(state) => console.log("edited", state)}
+  ref={(handle) => {
+    // handle.getState() / handle.setState(state)
+    // setState replaces speakers/segments; audio is fixed per instance (remount to change it)
+  }}
+/>;
 ```
+
+`initialState` is optional: omit it (or pass `null`) for audio you haven't
+transcribed yet and the annotator starts from a blank transcript with one
+speaker, ready to take segments — the same value `emptyAnnotation()` returns.
+
+`audioSource` accepts a plain `"https://…"` URL string — the annotator builds a
+`urlSource` for it, streams the WAV over `Range` requests, and tears that source
+down on unmount. Pass an `AudioSource` object instead when you build it yourself
+— `bufferSource(samples, rate)` for samples in memory,
+`bufferSourceFromBytes(bytes)` for WAV/raw f32 bytes, or a `urlSource` you want
+to configure or share; a source you pass stays caller-owned and the annotator
+never destroys it.
+
+Loading is a state a source passes through, not something to await. Every
+constructor returns immediately, and `source.geometry()` — the clip's shape, as
+opposed to its contents — reads `{ state: "pending" }`, `{ state: "known",
+duration, sampleRate }`, or `{ state: "failed", error }`. One union, so the two
+numbers can't be half-known and a failed source can't look loaded. Meanwhile
+`peaks()` answers with whatever samples have arrived (a flat line at first) and
+`createPlayer()` hands back a working transport bound to the URL, so a seek made
+during download is simply where playback begins.
+
+That's what lets audio and transcript stay decoupled: the transcript is editable
+from the first frame, with the timeline sized to the words and edits unbounded
+to the right until the audio says where the end is, while the waveform shows
+"Loading audio…" (or a failure line) and fills itself in.
 
 Framework-free (this is the surface a future anywidget bridge builds on —
 styles are injected automatically, ESM, no module-scope DOM access):
@@ -168,7 +188,7 @@ export default {
   async render({ model, el }) {
     const widget = mountAnnotator(el, {
       initialState: parseAnnotation(model.get("annotation")),
-      audioSource: await bufferSourceFromBytes(model.get("audio")), // sidecar bytes
+      audioSource: bufferSourceFromBytes(model.get("audio")), // sidecar bytes
       onChange: (s) => {
         model.set("annotation", serializeAnnotation(s));
         model.save_changes();

@@ -1,6 +1,6 @@
 import { Match, Show, Switch, createSignal, onCleanup, onMount } from "solid-js";
 import { Annotator } from "../../src/components/Annotator";
-import { urlSource, type AudioSource } from "../../src/audio";
+import { urlSource } from "../../src/audio";
 import type { AnnotationState, Segment, Speaker } from "../../src/types";
 
 interface Meta {
@@ -24,13 +24,17 @@ function hms(sec: number): string {
 export function App() {
   const [meta, setMeta] = createSignal<Meta | null>(null);
   const [state, setState] = createSignal<AnnotationState | null>(null);
-  const [source, setSource] = createSignal<AudioSource | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [dirty, setDirty] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
   const [savedAt, setSavedAt] = createSignal<string | null>(null);
 
   let latest: AnnotationState | null = null;
+
+  // The audio doesn't wait on the transcript, or on anything else: the source
+  // exists now and fills itself in, so the header fetch races the annotation
+  // fetch below instead of queueing behind it.
+  const source = urlSource("/audio.wav");
 
   onMount(() => {
     void (async () => {
@@ -39,7 +43,6 @@ export function App() {
         if (!res.ok) throw new Error(`annotation request failed: ${res.status}`);
         const m = (await res.json()) as Meta;
         setMeta(m);
-        setSource(await urlSource("/audio.wav"));
         const s: AnnotationState = {
           speakers: m.speakers,
           segments: m.segments,
@@ -87,7 +90,7 @@ export function App() {
   onCleanup(() => {
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("beforeunload", onBeforeUnload);
-    source()?.destroy();
+    source.destroy();
   });
 
   return (
@@ -98,7 +101,7 @@ export function App() {
           {(m) => (
             <span class="text-xs text-zinc-500">
               {m().dirName}/{m().psvName} · {m().segments.length} segments
-              <Show when={source()}>{(s) => <> · {hms(s().duration)} of audio</>}</Show>
+              <Show when={source.duration()}>{(d) => <> · {hms(d())} of audio</>}</Show>
             </span>
           )}
         </Show>
@@ -120,10 +123,10 @@ export function App() {
 
       <main class="flex-1 p-4">
         <Switch>
-          <Match when={state() && source()} keyed>
+          <Match when={state()} keyed>
             <Annotator
               initialState={state()!}
-              audioSource={source()!}
+              audioSource={source}
               onChange={(next) => {
                 latest = next;
                 setDirty(true);

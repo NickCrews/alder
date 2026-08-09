@@ -30,7 +30,7 @@ type Store = ReturnType<typeof createAnnotatorStore>;
 
 function withStore<T>(fn: (store: Store) => T): T {
   return createRoot((dispose) => {
-    const store = createAnnotatorStore(makeState(), { duration: 10 });
+    const store = createAnnotatorStore(makeState(), { audioEnd: () => 10 });
     const result = fn(store);
     dispose();
     return result;

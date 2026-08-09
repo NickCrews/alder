@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createRoot } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 import { createAnnotatorStore } from "../src/store";
-import { LAST_WORD_DURATION } from "../src/time";
+import { LAST_WORD_DURATION, MIN_GAP } from "../src/time";
 import type { AnnotationState } from "../src/types";
 
-/** 10s of audio; see `withStore` for where the duration is supplied. */
+/** 10s of audio; see `withStore` for where the audio end is supplied. */
 function makeState(): AnnotationState {
   return {
     speakers: [
@@ -27,7 +27,7 @@ function makeState(): AnnotationState {
 
 function withStore<T>(fn: (store: ReturnType<typeof createAnnotatorStore>) => T): T {
   return createRoot((dispose) => {
-    const store = createAnnotatorStore(makeState(), { duration: 10 });
+    const store = createAnnotatorStore(makeState(), { audioEnd: () => 10 });
     const result = fn(store);
     dispose();
     return result;
@@ -398,6 +398,21 @@ describe("store ops", () => {
     });
   });
 
+  describe("no initial state", () => {
+    it("starts blank with one speaker to attribute the first segment to", () => {
+      createRoot((dispose) => {
+        const s = createAnnotatorStore(null, { audioEnd: () => 10 });
+        expect(s.doc.segments).toEqual([]);
+        expect(s.doc.speakers).toEqual([{ id: 0, label: "Speaker 1" }]);
+        s.createSegment(1.0);
+        expect(s.doc.segments).toHaveLength(1);
+        expect(s.doc.segments[0].speaker_id).toBe(0);
+        expect(s.doc.speakers).toHaveLength(1); // reused, not a second "Speaker 1"
+        dispose();
+      });
+    });
+  });
+
   describe("lastWordDur", () => {
     it("is the median gap pooled across every segment", () => {
       withStore((s) => {
@@ -408,7 +423,7 @@ describe("store ops", () => {
 
     it("falls back to the constant for an empty document", () => {
       createRoot((dispose) => {
-        const s = createAnnotatorStore({ ...makeState(), segments: [] }, { duration: 10 });
+        const s = createAnnotatorStore({ ...makeState(), segments: [] }, { audioEnd: () => 10 });
         expect(s.lastWordDur()).toBe(LAST_WORD_DURATION);
         dispose();
       });
@@ -416,7 +431,7 @@ describe("store ops", () => {
 
     it("grows from the fallback once the document has a pair to measure", () => {
       createRoot((dispose) => {
-        const s = createAnnotatorStore({ ...makeState(), segments: [] }, { duration: 10 });
+        const s = createAnnotatorStore({ ...makeState(), segments: [] }, { audioEnd: () => 10 });
         s.createSegment(1.0);
         expect(s.lastWordDur()).toBe(LAST_WORD_DURATION); // one lone word, nothing to measure
         s.setState({
@@ -452,10 +467,95 @@ describe("store ops", () => {
     });
   });
 
+  describe("the end-of-timeline bound", () => {
+    /** A store whose bound is read from `end` on every access, the way the
+     * annotator supplies the audio length once it lands. */
+    function withBound<T>(
+      end: () => number | null,
+      fn: (store: ReturnType<typeof createAnnotatorStore>) => T,
+    ): T {
+      return createRoot((dispose) => {
+        const store = createAnnotatorStore(makeState(), { audioEnd: end });
+        const result = fn(store);
+        dispose();
+        return result;
+      });
+    }
+
+    it("pins the last word at the audio's end, however many times it's dragged", () => {
+      withBound(
+        () => 10,
+        (s) => {
+          const key = s.doc.segments[1].key; // the lone word at 5.0
+          for (const target of [50, 500, 5000]) {
+            s.beginOp();
+            s.moveWord(key, 0, target);
+            s.endOp();
+            // Each drag must land on the same wall. A bound that fed back off
+            // the document would step the wall out and let the word ratchet.
+            expect(s.doc.segments[1].words[0].timestamp).toBeCloseTo(10 - MIN_GAP, 6);
+          }
+        },
+      );
+    });
+
+    it("leaves edits unbounded while the end is unknown", () => {
+      withBound(
+        () => null,
+        (s) => {
+          const key = s.doc.segments[1].key;
+          s.beginOp();
+          s.moveWord(key, 0, 50);
+          s.endOp();
+          expect(s.doc.segments[1].words[0].timestamp).toBe(50);
+        },
+      );
+    });
+
+    it("starts clamping as soon as the audio reports an end", () => {
+      const [end, setEnd] = createSignal<number | null>(null);
+      withBound(end, (s) => {
+        const key = s.doc.segments[1].key;
+        s.beginOp();
+        s.moveWord(key, 0, 8);
+        s.endOp();
+        expect(s.doc.segments[1].words[0].timestamp).toBe(8);
+        setEnd(10);
+        s.beginOp();
+        s.moveWord(key, 0, 50);
+        s.endOp();
+        expect(s.doc.segments[1].words[0].timestamp).toBeCloseTo(10 - MIN_GAP, 6);
+      });
+    });
+
+    it("pastes finite timestamps even with no end to squeeze against", () => {
+      withBound(
+        () => null,
+        (s) => {
+          s.setSelection(null);
+          s.pasteText("one two three", 4);
+          const words = s.getState().segments.flatMap((seg) => seg.words);
+          expect(words.every((w) => Number.isFinite(w.timestamp))).toBe(true);
+          expect(words.some((w) => w.text === "three")).toBe(true);
+        },
+      );
+    });
+
+    it("reports an op as active only between beginOp and endOp", () => {
+      withStore((s) => {
+        expect(s.opActive()).toBe(false);
+        s.beginOp();
+        expect(s.opActive()).toBe(true);
+        s.endOp();
+        expect(s.opActive()).toBe(false);
+      });
+    });
+  });
+
   it("fires onChange on committed ops only", () => {
     createRoot((dispose) => {
       let count = 0;
-      const s = createAnnotatorStore(makeState(), { duration: 10, onChange: () => count++ });
+      const s = createAnnotatorStore(makeState(), { audioEnd: () => 10, onChange: () => count++ });
       s.beginOp();
       s.moveWord(s.doc.segments[0].key, 0, 1.2);
       expect(count).toBe(0); // mid-drag

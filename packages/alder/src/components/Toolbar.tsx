@@ -10,6 +10,12 @@ const btn =
 export function Toolbar(props: { ctx: Ctx }) {
   const { player, store } = props.ctx;
 
+  /** Clip length for the clock — a dash while the audio hasn't said yet. */
+  const total = () => {
+    const d = player.duration();
+    return d == null ? "—" : formatTime(d);
+  };
+
   const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
   /** "3 segments", "5 words", or "2 segments + 5 words" for a mixed selection. */
   const selectionLabel = () => {
@@ -37,7 +43,7 @@ export function Toolbar(props: { ctx: Ctx }) {
         {player.playing() ? "❚❚" : "▶"}
       </button>
       <span class="font-mono text-xs text-zinc-400">
-        {formatTime(player.time())} / {formatTime(player.duration)}
+        {formatTime(player.time())} / {total()}
       </span>
       <select
         class={`${btn} font-mono`}
@@ -76,7 +82,7 @@ export function Toolbar(props: { ctx: Ctx }) {
       </button>
       <button
         class={btn}
-        onClick={() => props.ctx.setView({ start: 0, dur: props.ctx.duration })}
+        onClick={() => props.ctx.setView({ start: 0, dur: props.ctx.duration() })}
         title="Fit whole clip"
       >
         fit

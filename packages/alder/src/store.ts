@@ -1,4 +1,4 @@
-import { createMemo, createSignal } from "solid-js";
+import { createMemo, createSignal, type Accessor } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 import type { AnnotationState, Speaker, Word } from "./types";
 import { MIN_GAP, clamp, lastWordDuration, segEnd, segStart, wordEnd } from "./time";
@@ -38,16 +38,41 @@ const MAX_HISTORY = 200;
 export type AnnotatorStore = ReturnType<typeof createAnnotatorStore>;
 
 export interface StoreOptions {
-  /** Length of the audio in seconds — the timeline edits are clamped against.
-   * Audio lives in an {@link AudioSource}, so the store is told its duration
-   * rather than measuring it. */
-  duration: number;
+  /** Where the audio ends, in seconds — no edit may push a word past it. An
+   * {@link Accessor} because the end is learned late: audio arrives after the
+   * transcript is already editable, so the value flips from unknown to known
+   * mid-session and every clamp has to see the change.
+   *
+   * `null` means the end isn't known yet, and edits run unbounded to the right
+   * rather than being clamped against a guess. It must never be derived from
+   * the transcript itself — a bound that grows with the words it bounds never
+   * binds, and the last word ratchets rightward one drag at a time. */
+  audioEnd: Accessor<number | null>;
   /** Fired with the full annotation after every committed edit. */
   onChange?: (state: AnnotationState) => void;
 }
 
-export function createAnnotatorStore(initial: AnnotationState, opts: StoreOptions) {
-  const { duration, onChange } = opts;
+/** A blank transcript: no segments, and one speaker to attribute the first one
+ * to. What you get when you open audio with nothing transcribed yet, so callers
+ * in that position pass `null` rather than hand-rolling this. */
+export const emptyAnnotation = (): AnnotationState => ({
+  speakers: [{ id: 0, label: "Speaker 1" }],
+  segments: [],
+});
+
+/** `initial` may be `null`/omitted — audio with no transcript yet starts from
+ * {@link emptyAnnotation}. */
+export function createAnnotatorStore(
+  initial: AnnotationState | null | undefined,
+  opts: StoreOptions,
+) {
+  const { onChange } = opts;
+  const start = initial ?? emptyAnnotation();
+  /** {@link StoreOptions.audioEnd} as a clamp bound, with "not known yet"
+   * spelled as `Infinity` so every call site can stay plain arithmetic. Only
+   * {@link pasteAsSegment}, which squeezes words in to *reach* the end, has to
+   * ask whether the end is finite. */
+  const maxTime: Accessor<number> = () => opts.audioEnd() ?? Infinity;
 
   const toRec = (s: { speaker_id: number; words: Word[] }): SegRec => ({
     key: nextKey++,
@@ -56,8 +81,8 @@ export function createAnnotatorStore(initial: AnnotationState, opts: StoreOption
   });
 
   const [doc, setDoc] = createStore<Doc>({
-    speakers: initial.speakers.map((s) => ({ ...s })),
-    segments: initial.segments.map(toRec),
+    speakers: start.speakers.map((s) => ({ ...s })),
+    segments: start.segments.map(toRec),
   });
   // The selection is one flat set of items that may freely mix whole segments
   // and individual words. `selection` is the focus (the item the caret is on,
@@ -152,6 +177,10 @@ export function createAnnotatorStore(initial: AnnotationState, opts: StoreOption
    * other segment mid-gesture. */
   const lastWordDur = () => frozenDur() ?? measuredDur();
 
+  /** True for the span of an op — i.e. while a drag is live. Lets the view hold
+   * anything it derives from the document steady until the gesture ends. */
+  const opActive = () => frozenDur() != null;
+
   /** Push an undo snapshot. Call once before an operation (or drag) begins. */
   function beginOp() {
     setFrozenDur(measuredDur());
@@ -225,7 +254,7 @@ export function createAnnotatorStore(initial: AnnotationState, opts: StoreOption
         const hi =
           i < seg.words.length - 1
             ? seg.words[i + 1].timestamp - MIN_GAP
-            : duration - MIN_GAP;
+            : maxTime() - MIN_GAP;
         seg.words[i].timestamp = clamp(t, lo, Math.max(lo, hi));
       }),
     );
@@ -256,7 +285,7 @@ export function createAnnotatorStore(initial: AnnotationState, opts: StoreOption
         const bound =
           i < seg.words.length - 1
             ? seg.words[i + 1].timestamp - MIN_GAP
-            : duration - MIN_GAP;
+            : maxTime() - MIN_GAP;
         hi = Math.min(hi, bound - t0);
       }
     });
@@ -293,7 +322,7 @@ export function createAnnotatorStore(initial: AnnotationState, opts: StoreOption
         if (!seg.words.length) return;
         const first = seg.words[0].timestamp;
         const last = seg.words[seg.words.length - 1].timestamp;
-        const d = clamp(delta, -first, duration - lastWordDur() - last);
+        const d = clamp(delta, -first, maxTime() - lastWordDur() - last);
         for (const w of seg.words) w.timestamp += d;
       }),
     );
@@ -369,7 +398,7 @@ export function createAnnotatorStore(initial: AnnotationState, opts: StoreOption
         d.segments.push({
           key: newKey,
           speaker_id: spId,
-          words: [{ timestamp: clamp(time, 0, duration - lastWordDur()), text: "…" }],
+          words: [{ timestamp: clamp(time, 0, maxTime() - lastWordDur()), text: "…" }],
         });
       }),
     );
@@ -599,11 +628,14 @@ export function createAnnotatorStore(initial: AnnotationState, opts: StoreOption
     if (!tokens.length) return;
     beginOp();
     const n = tokens.length;
-    let start = clamp(atTime, 0, duration);
-    let gap = Math.min(lastWordDur(), (duration - start) / n);
+    const dur = maxTime();
+    let start = clamp(atTime, 0, dur);
+    let gap = Math.min(lastWordDur(), (dur - start) / n);
     if (gap < MIN_GAP) {
       gap = MIN_GAP;
-      start = clamp(duration - n * gap, 0, duration);
+      // Only worth backing the run up when there is an end to fit inside; with
+      // no known end there is nothing to squeeze against.
+      if (Number.isFinite(dur)) start = clamp(dur - n * gap, 0, dur);
     }
     const segs = orderedSegs();
     const covering = segs.find(
@@ -744,7 +776,7 @@ export function createAnnotatorStore(initial: AnnotationState, opts: StoreOption
 
   return {
     doc,
-    duration,
+    opActive,
     selection,
     setSelection,
     selectedItems,

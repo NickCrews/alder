@@ -16,11 +16,11 @@ export {
 export { LAST_WORD_DURATION, lastWordDuration, segEnd, segStart, wordEnd } from "./time";
 export { assignLanes } from "./lanes";
 export { bufferSource, bufferSourceFromBytes, urlSource, wavRangeSource } from "./audio";
-export type { AudioSource, Peaks } from "./audio";
+export type { AudioGeometry, AudioSource, Peaks } from "./audio";
 export { decodeWindow, parseWavHeader } from "./wav";
 export type { WavHeader } from "./wav";
 export { createBufferPlayer, createElementPlayer } from "./player";
 export type { Player } from "./player";
-export { createAnnotatorStore } from "./store";
+export { createAnnotatorStore, emptyAnnotation } from "./store";
 export type { AnnotatorStore, SegRec, Selection, StoreOptions } from "./store";
 export { speakerColor } from "./colors";

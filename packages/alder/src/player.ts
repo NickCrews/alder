@@ -5,7 +5,10 @@ import { clamp } from "./time";
 export interface Player {
   playing: Accessor<boolean>;
   time: Accessor<number>;
-  duration: number;
+  /** Clip length in seconds, or null while the audio is still loading — a
+   * transport can exist, and take commands, before anyone knows how long the
+   * clip is. Seeks aren't clamped against an unknown end. */
+  duration: Accessor<number | null>;
   rate: Accessor<number>;
   setRate(rate: number): void;
   play(): void;
@@ -18,6 +21,7 @@ export interface Player {
 /** Web Audio playback for a Float32Array. No-ops in environments without
  * AudioContext (e.g. jsdom). */
 export function createBufferPlayer(audio: Float32Array, sampleRate: number): Player {
+  // Samples in hand, so the length is known from the start and never changes.
   const duration = audio.length / sampleRate;
   const [playing, setPlaying] = createSignal(false);
   const [time, setTime] = createSignal(0);
@@ -131,17 +135,35 @@ export function createBufferPlayer(audio: Float32Array, sampleRate: number): Pla
     ctx = null;
   }
 
-  return { playing, time, duration, rate, setRate, play, pause, toggle, seek, destroy };
+  return {
+    playing,
+    time,
+    duration: () => duration,
+    rate,
+    setRate,
+    play,
+    pause,
+    toggle,
+    seek,
+    destroy,
+  };
 }
 
 /** Playback straight from a URL. The browser streams and seeks with range
  * requests, so a three-hour file costs no memory here. `duration` is supplied
  * rather than read off the element, because the element only learns it after
- * metadata arrives — and for a long WAV that can be a whole download. */
-export function createElementPlayer(url: string, duration: number): Player {
+ * metadata arrives — and for a long WAV that can be a whole download. It's an
+ * accessor because the *source* may not know it yet either: this player is
+ * usable from the moment the URL is known, and simply doesn't clamp against an
+ * end it hasn't been told about. A `currentTime` set before metadata arrives
+ * becomes the element's default playback start position, so an early seek is
+ * honoured rather than lost. */
+export function createElementPlayer(url: string, duration: Accessor<number | null>): Player {
   const [playing, setPlaying] = createSignal(false);
   const [time, setTime] = createSignal(0);
   const [rate, setRateSignal] = createSignal(1);
+  /** The end to clamp against; unbounded while it's unknown. */
+  const end = () => duration() ?? Infinity;
   let raf = 0;
 
   const el = typeof Audio !== "undefined" ? new Audio() : null;
@@ -151,7 +173,7 @@ export function createElementPlayer(url: string, duration: number): Player {
     el.addEventListener("ended", () => {
       setPlaying(false);
       cancelAnimationFrame(raf);
-      setTime(duration);
+      setTime(duration() ?? el.currentTime);
     });
     el.addEventListener("pause", () => {
       setPlaying(false);
@@ -160,13 +182,13 @@ export function createElementPlayer(url: string, duration: number): Player {
   }
 
   function tick() {
-    if (el) setTime(clamp(el.currentTime, 0, duration));
+    if (el) setTime(clamp(el.currentTime, 0, end()));
     if (playing()) raf = requestAnimationFrame(tick);
   }
 
   function play() {
     if (!el || playing()) return;
-    if (el.currentTime >= duration - 0.01) el.currentTime = 0;
+    if (el.currentTime >= end() - 0.01) el.currentTime = 0;
     void el.play().catch(() => setPlaying(false));
     setPlaying(true);
     raf = requestAnimationFrame(tick);
@@ -175,7 +197,7 @@ export function createElementPlayer(url: string, duration: number): Player {
   function pause() {
     if (!el || !playing()) return;
     el.pause();
-    setTime(clamp(el.currentTime, 0, duration));
+    setTime(clamp(el.currentTime, 0, end()));
     setPlaying(false);
     cancelAnimationFrame(raf);
   }
@@ -195,8 +217,10 @@ export function createElementPlayer(url: string, duration: number): Player {
     pause,
     toggle: () => (playing() ? pause() : play()),
     seek(t) {
-      const target = clamp(t, 0, duration);
+      const target = clamp(t, 0, end());
       setTime(target);
+      // Before metadata this sets the default playback start position rather
+      // than seeking, which is exactly the handoff we want.
       if (el) el.currentTime = target;
     },
     destroy() {

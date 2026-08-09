@@ -1,8 +1,8 @@
-import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import type { AnnotationState } from "../types";
 import { createAnnotatorStore } from "../store";
-import type { AudioSource } from "../audio";
-import { clamp } from "../time";
+import { urlSource, type AudioSource } from "../audio";
+import { clamp, segEnd } from "../time";
 import { runsToHtml, runsToText } from "../clipboard";
 import { ensureStyles } from "../ensureStyles";
 import type { Ctx, Guide, Viewport } from "./ctx";
@@ -19,13 +19,22 @@ export interface AnnotatorHandle {
 }
 
 export interface AnnotatorProps {
-  /** The transcript to edit. Audio is supplied separately via {@link audioSource}. */
-  initialState: AnnotationState;
-  /** Where the waveform and playback get their audio. Use `bufferSourceFromBytes`
-   * (or `bufferSource`) for samples in memory, or `urlSource` to stream long
-   * audio so nothing but the envelope crosses into the tab. The caller owns it:
-   * the annotator never destroys a source it didn't create. */
-  audioSource: AudioSource;
+  /** The transcript to edit. Audio is supplied separately via {@link audioSource}.
+   * Omit it (or pass `null`) to start from a blank transcript — audio you
+   * haven't transcribed yet is the common case, and callers shouldn't have to
+   * spell out what "empty" means. */
+  initialState?: AnnotationState | null;
+  /** Where the waveform and playback get their audio. Pass a `"https://…"` URL
+   * to stream a WAV straight from a static host — the annotator builds it with
+   * {@link urlSource} and, since it created that source, destroys it on cleanup.
+   * Or pass an {@link AudioSource} you built yourself: `bufferSourceFromBytes`
+   * (or `bufferSource`) for samples in memory, `urlSource` for finer control or
+   * to share one source between mounts. A source you pass stays yours — the
+   * annotator never destroys one it didn't create.
+   *
+   * Either way the source may still be loading; the annotator doesn't wait on
+   * it. See {@link AudioSource} for what that means. */
+  audioSource: AudioSource | string;
   /** Fired with the full annotation after every committed edit. */
   onChange?: (state: AnnotationState) => void;
   ref?: (handle: AnnotatorHandle) => void;
@@ -36,24 +45,73 @@ const MIN_VIEW_DUR = 0.05;
 
 export function Annotator(props: AnnotatorProps) {
   ensureStyles();
+
   // eslint-disable-next-line solid/reactivity -- audio is fixed for the life of the instance
-  const source = props.audioSource;
+  const sourceOrUrl = props.audioSource;
+  // A URL string is ours to build and ours to tear down; a source the caller
+  // built stays theirs. Either way we have a source right now — one that may
+  // still be loading — so there is nothing here to await and nothing to render
+  // around. The transcript is editable from the first frame.
+  const owned = typeof sourceOrUrl === "string";
+  const audio = owned ? urlSource(sourceOrUrl) : sourceOrUrl;
+  if (owned) onCleanup(() => audio.destroy());
+
+  // Likewise the transport: a player is bound to the audio, not to its arrival,
+  // so the toolbar and keys drive real playback from the start. A seek made
+  // while the file is still downloading is where playback begins.
+  const player = audio.createPlayer();
+  onCleanup(() => player.destroy());
+
   // eslint-disable-next-line solid/reactivity -- initialState is intentionally captured once
   const store = createAnnotatorStore(props.initialState, {
-    duration: source.duration,
+    // The edit bound is the audio's end and nothing else. It deliberately does
+    // *not* use `duration()` below: that includes the transcript's own extent,
+    // so clamping against it would let the last word push the bound it's being
+    // clamped to, one drag at a time. Unknown (null) means unbounded, which is
+    // the honest answer before the audio has told us where the end is.
+    audioEnd: audio.duration,
     onChange: (s) => props.onChange?.(s),
   });
-  const player = source.createPlayer();
-  const duration = Math.max(source.duration, MIN_VIEW_DUR);
 
-  const [view, setViewRaw] = createSignal<Viewport>({ start: 0, dur: duration });
+  // The timeline's far edge *to draw*. Until audio lands there's still an extent
+  // — the end of the last word — so the transcript is fully visible and editable
+  // meanwhile; the audio length takes over (whichever is longer) once the header
+  // arrives, widening the view reactively.
+  const docDuration = createMemo(() => {
+    let end = 0;
+    for (const seg of store.doc.segments) {
+      const e = segEnd(seg, store.lastWordDur());
+      if (e > end) end = e;
+    }
+    return end;
+  });
+  const duration = createMemo(() =>
+    Math.max(audio.duration() ?? 0, docDuration(), MIN_VIEW_DUR),
+  );
+
+  // What the auto-fit view fits, held still for the span of an edit. `duration`
+  // tracks the document, so without the latch dragging the last word rightward
+  // would shrink the pixel scale under the cursor mid-gesture; the fit catches
+  // up in one step when the drag ends. (Not read while an op is live, so no
+  // subscription to `duration` is taken during the drag either.)
+  const fitDuration = createMemo<number>(
+    (prev) => (store.opActive() ? prev : duration()),
+    duration(),
+  );
+
+  const [manualView, setManualView] = createSignal<Viewport | null>(null);
   const [width, setWidth] = createSignal(800);
   const [guide, setGuide] = createSignal<Guide | null>(null);
   let bodyRef: HTMLDivElement | undefined;
 
+  // Until the user pans or zooms, the view auto-fits the whole timeline — so it
+  // grows from the transcript's extent to the full clip when audio arrives,
+  // rather than staying pinned to a stale window.
+  const view = (): Viewport => manualView() ?? { start: 0, dur: fitDuration() };
   const setView = (v: Viewport) => {
-    const dur = clamp(v.dur, MIN_VIEW_DUR, duration);
-    setViewRaw({ start: clamp(v.start, 0, duration - dur), dur });
+    const d = duration();
+    const dur = clamp(v.dur, MIN_VIEW_DUR, d);
+    setManualView({ start: clamp(v.start, 0, d - dur), dur });
   };
   const scale = () => width() / view().dur;
   const x = (t: number) => (t - view().start) * scale();
@@ -62,7 +120,7 @@ export function Annotator(props: AnnotatorProps) {
   const ctx: Ctx = {
     store,
     player,
-    audioSource: source,
+    audioSource: audio,
     view,
     setView,
     guide,
@@ -86,7 +144,6 @@ export function Annotator(props: AnnotatorProps) {
       }
     }
   });
-  onCleanup(() => player.destroy());
 
   // Follow the playhead: shift the view when it runs off the right edge.
   createEffect(() => {
@@ -107,7 +164,7 @@ export function Annotator(props: AnnotatorProps) {
     } else {
       const anchor = timeAt(e.clientX - rect.left);
       const factor = Math.pow(1.0015, e.deltaY);
-      const dur = clamp(v.dur * factor, MIN_VIEW_DUR, duration);
+      const dur = clamp(v.dur * factor, MIN_VIEW_DUR, duration());
       setView({ start: anchor - (anchor - v.start) * (dur / v.dur), dur });
     }
   }
